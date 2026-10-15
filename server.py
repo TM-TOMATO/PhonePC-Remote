@@ -88,10 +88,42 @@ async def show_pc_confirm_dialog(device_name):
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, _show_native_confirm_box, device_name)
 
-# Generate random 9-digit Session ID and 4-digit PIN (TeamViewer style)
-SESSION_ID_RAW = str(random.randint(100000000, 999999999))
+HOST_CONFIG_FILE = Path(__file__).parent / "host_config.json"
+
+def load_or_create_host_config():
+    config = {}
+    if HOST_CONFIG_FILE.exists():
+        try:
+            with open(HOST_CONFIG_FILE, "r", encoding="utf-8") as f:
+                config = json.load(f)
+        except Exception:
+            config = {}
+
+    modified = False
+    raw_id = str(config.get("partner_id", "")).strip().replace(" ", "")
+    if not raw_id.isdigit() or len(raw_id) != 9:
+        config["partner_id"] = str(random.randint(100000000, 999999999))
+        modified = True
+
+    raw_pin = str(config.get("pin", "")).strip()
+    if not raw_pin.isdigit() or len(raw_pin) != 4:
+        config["pin"] = str(random.randint(1000, 9999))
+        modified = True
+
+    if modified:
+        try:
+            with open(HOST_CONFIG_FILE, "w", encoding="utf-8") as f:
+                json.dump(config, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"Error saving host config: {e}")
+
+    return config
+
+# Persistent Credentials (TeamViewer style)
+_host_cfg = load_or_create_host_config()
+SESSION_ID_RAW = _host_cfg["partner_id"]
 FORMATTED_ID = f"{SESSION_ID_RAW[0:3]} {SESSION_ID_RAW[3:6]} {SESSION_ID_RAW[6:9]}"
-SESSION_PIN = str(random.randint(1000, 9999))
+SESSION_PIN = _host_cfg["pin"]
 
 # Active WebSocket connections
 host_websockets = set()
@@ -301,23 +333,26 @@ async def websocket_handler(request):
                         continue
 
                     elif msg_type == "auth_token":
-                        req_id = str(payload.get("id", "")).replace(" ", "").strip()
                         req_token = str(payload.get("token", "")).strip()
 
-                        if req_id == SESSION_ID_RAW and verify_trusted_token(req_token):
+                        if verify_trusted_token(req_token):
                             is_authenticated = True
                             authenticated_clients.add(client_ip)
-                            print(f"[★] 저장된 기기 토큰 인증 성공! (비번/QR 생략): {client_ip}")
+                            print(f"[★] 저장된 기기 토큰 인증 성공! (비번/QR 생략 즉시 연결): {client_ip}")
                             await ws.send_json({
                                 "type": "auth_success",
-                                "payload": { "message": "저장된 컴퓨터 인증 성공!" }
+                                "payload": {
+                                    "message": "저장된 컴퓨터 인증 성공!",
+                                    "pc_id": SESSION_ID_RAW,
+                                    "pc_name": socket.gethostname()
+                                }
                             })
                             await notify_host_status(True, client_ip)
                         else:
-                            print(f"[!] 토큰 인증 실패: {client_ip}")
+                            print(f"[!] 저장된 기기 토큰 인증 실패: {client_ip}")
                             await ws.send_json({
                                 "type": "auth_fail",
-                                "payload": { "message": "저장된 컴퓨터 인증이 만료되었거나 올바르지 않습니다." }
+                                "payload": { "message": "저장된 컴퓨터 인증 토큰이 유효하지 않거나 등록이 해제되었습니다." }
                             })
                         continue
 

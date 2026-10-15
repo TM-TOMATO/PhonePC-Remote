@@ -1666,6 +1666,24 @@ html, body {
   font-weight: 700;
 }
 
+.badge-pw-free {
+  display: inline-block;
+  background: rgba(16, 185, 129, 0.18);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.pc-host-tag {
+  display: inline-block;
+  color: #94a3b8;
+  font-size: 10px;
+  margin-left: 4px;
+}
+
 .saved-pcs-list {
   display: flex;
   flex-direction: column;

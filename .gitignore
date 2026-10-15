@@ -19,6 +19,9 @@ build_apk/
 *.log
 tunnel_*.log
 trusted_devices.json
+host_config.json
+portable_dist/
+*.zip
 
 # Node
 node_modules/

@@ -120,10 +120,45 @@ async def show_pc_confirm_dialog(device_name):
     else:
         return await loop.run_in_executor(None, _show_native_confirm_box, device_name)
 
-# Credentials
-SESSION_ID_RAW = str(random.randint(100000000, 999999999))
+HOST_CONFIG_FILE = BASE_DIR / "host_config.json"
+
+def load_or_create_host_config():
+    config = {}
+    if HOST_CONFIG_FILE.exists():
+        try:
+            with open(HOST_CONFIG_FILE, "r", encoding="utf-8") as f:
+                config = json.load(f)
+        except Exception:
+            config = {}
+
+    modified = False
+    raw_id = str(config.get("partner_id", "")).strip().replace(" ", "")
+    if not raw_id.isdigit() or len(raw_id) != 9:
+        config["partner_id"] = str(random.randint(100000000, 999999999))
+        modified = True
+
+    raw_pin = str(config.get("pin", "")).strip()
+    if not raw_pin.isdigit() or len(raw_pin) != 4:
+        config["pin"] = str(random.randint(1000, 9999))
+        modified = True
+
+    if modified:
+        save_host_config(config)
+
+    return config
+
+def save_host_config(config):
+    try:
+        with open(HOST_CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(config, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"Error saving host config: {e}")
+
+# Persistent Credentials (TeamViewer style: ID stays consistent, PIN persists or can be refreshed)
+_host_cfg = load_or_create_host_config()
+SESSION_ID_RAW = _host_cfg["partner_id"]
 FORMATTED_ID = f"{SESSION_ID_RAW[0:3]} {SESSION_ID_RAW[3:6]} {SESSION_ID_RAW[6:9]}"
-SESSION_PIN = str(random.randint(1000, 9999))
+SESSION_PIN = _host_cfg["pin"]
 
 # URLs
 LOCAL_IP = "127.0.0.1"
@@ -286,19 +321,27 @@ async def websocket_handler(request):
                         continue
 
                     elif msg_type == "auth_token":
-                        req_id = str(payload.get("id", "")).replace(" ", "").strip()
                         req_token = str(payload.get("token", "")).strip()
 
-                        if req_id == SESSION_ID_RAW and verify_trusted_token(req_token):
+                        if verify_trusted_token(req_token):
                             is_authenticated = True
                             authenticated_clients.add(client_ip)
                             audio_streamer.add_subscriber(ws)
-                            await ws.send_json({"type": "auth_success"})
+                            print(f"[★] 저장된 기기 토큰 인증 성공! (비번/QR 생략 즉시 연결): {client_ip}")
+                            await ws.send_json({
+                                "type": "auth_success",
+                                "payload": {
+                                    "message": "저장된 컴퓨터 인증 성공!",
+                                    "pc_id": SESSION_ID_RAW,
+                                    "pc_name": socket.gethostname()
+                                }
+                            })
                             update_gui_status(True, client_ip)
                         else:
+                            print(f"[!] 저장된 기기 토큰 인증 실패: {client_ip}")
                             await ws.send_json({
                                 "type": "auth_fail",
-                                "payload": {"message": "저장된 컴퓨터 인증이 만료되었거나 올바르지 않습니다."}
+                                "payload": {"message": "저장된 컴퓨터 인증 토큰이 유효하지 않거나 등록이 해제되었습니다."}
                             })
                         continue
 
@@ -536,13 +579,15 @@ class PhonePCApp(tk.Tk):
         # ID Row
         id_frame = tk.Frame(card, bg="#161f31", padx=16, pady=10)
         id_frame.pack(fill=tk.X)
-        tk.Label(id_frame, text="파트너 접속 ID", font=("Malgun Gothic", 9), fg="#94a3b8", bg="#161f31").pack(anchor=tk.W)
+        tk.Label(id_frame, text="파트너 접속 ID (고정)", font=("Malgun Gothic", 9), fg="#94a3b8", bg="#161f31").pack(anchor=tk.W)
         id_val_box = tk.Frame(id_frame, bg="#161f31")
         id_val_box.pack(fill=tk.X, pady=2)
         self.id_lbl = tk.Label(id_val_box, text=FORMATTED_ID, font=("Consolas", 18, "bold"), fg="#38bdf8", bg="#161f31")
         self.id_lbl.pack(side=tk.LEFT)
         copy_id_btn = tk.Button(id_val_box, text="복사", font=("Malgun Gothic", 9), bg="#334155", fg="#ffffff", bd=0, padx=8, pady=2, command=self.copy_id, cursor="hand2")
         copy_id_btn.pack(side=tk.RIGHT)
+        regen_id_btn = tk.Button(id_val_box, text="🔄 ID 변경", font=("Malgun Gothic", 8), bg="#1e293b", fg="#94a3b8", bd=0, padx=6, pady=2, command=self.regen_id, cursor="hand2")
+        regen_id_btn.pack(side=tk.RIGHT, padx=(0, 4))
 
         # Divider
         tk.Frame(card, bg="#334155", height=1).pack(fill=tk.X)
@@ -550,13 +595,15 @@ class PhonePCApp(tk.Tk):
         # PIN Row
         pin_frame = tk.Frame(card, bg="#161f31", padx=16, pady=10)
         pin_frame.pack(fill=tk.X)
-        tk.Label(pin_frame, text="1회용 접속 비밀번호 (PIN)", font=("Malgun Gothic", 9), fg="#94a3b8", bg="#161f31").pack(anchor=tk.W)
+        tk.Label(pin_frame, text="접속 비밀번호 (PIN)", font=("Malgun Gothic", 9), fg="#94a3b8", bg="#161f31").pack(anchor=tk.W)
         pin_val_box = tk.Frame(pin_frame, bg="#161f31")
         pin_val_box.pack(fill=tk.X, pady=2)
         self.pin_lbl = tk.Label(pin_val_box, text=SESSION_PIN, font=("Consolas", 18, "bold"), fg="#06b6d4", bg="#161f31")
         self.pin_lbl.pack(side=tk.LEFT)
         copy_pin_btn = tk.Button(pin_val_box, text="복사", font=("Malgun Gothic", 9), bg="#334155", fg="#ffffff", bd=0, padx=8, pady=2, command=self.copy_pin, cursor="hand2")
         copy_pin_btn.pack(side=tk.RIGHT)
+        regen_pin_btn = tk.Button(pin_val_box, text="🔄 새 PIN", font=("Malgun Gothic", 8), bg="#1e293b", fg="#94a3b8", bd=0, padx=6, pady=2, command=self.regen_pin, cursor="hand2")
+        regen_pin_btn.pack(side=tk.RIGHT, padx=(0, 4))
 
         # QR Code Display
         qr_box = tk.Frame(content, bg="#161f31", bd=1, relief=tk.SOLID, highlightbackground="#334155", highlightthickness=1, pady=10)
@@ -682,16 +729,35 @@ class PhonePCApp(tk.Tk):
         self.clipboard_append(SESSION_PIN)
         messagebox.showinfo("복사 완료", f"비밀번호 [{SESSION_PIN}] 가 클립보드에 복사되었습니다.")
 
+    def regen_id(self):
+        global SESSION_ID_RAW, FORMATTED_ID, CURRENT_CONNECT_URL
+        if messagebox.askyesno("파트너 ID 변경", "파트너 접속 ID를 새로 생성하시겠습니까?\n\n(참고: ID를 변경해도 이미 '저장된 컴퓨터'로 등록된 스마트폰은 즉시 연결이 유지됩니다.)"):
+            SESSION_ID_RAW = str(random.randint(100000000, 999999999))
+            FORMATTED_ID = f"{SESSION_ID_RAW[0:3]} {SESSION_ID_RAW[3:6]} {SESSION_ID_RAW[6:9]}"
+            _cfg = load_or_create_host_config()
+            _cfg["partner_id"] = SESSION_ID_RAW
+            save_host_config(_cfg)
+            self.id_lbl.configure(text=FORMATTED_ID)
+            if getattr(self, 'current_mode', 'tunnel') == 'wifi' or not PUBLIC_TUNNEL_URL:
+                CURRENT_CONNECT_URL = f"http://{LOCAL_IP}:{PORT}/?id={SESSION_ID_RAW}&pin={SESSION_PIN}"
+            else:
+                CURRENT_CONNECT_URL = f"{PUBLIC_TUNNEL_URL}/?id={SESSION_ID_RAW}&pin={SESSION_PIN}"
+            self.update_qr_image()
+            messagebox.showinfo("ID 변경 완료", f"새 파트너 ID [{FORMATTED_ID}] 가 설정되었습니다.")
+
     def regen_pin(self):
         global SESSION_PIN, CURRENT_CONNECT_URL
         SESSION_PIN = str(random.randint(1000, 9999))
+        _cfg = load_or_create_host_config()
+        _cfg["pin"] = SESSION_PIN
+        save_host_config(_cfg)
         self.pin_lbl.configure(text=SESSION_PIN)
         if getattr(self, 'current_mode', 'tunnel') == 'wifi' or not PUBLIC_TUNNEL_URL:
             CURRENT_CONNECT_URL = f"http://{LOCAL_IP}:{PORT}/?id={SESSION_ID_RAW}&pin={SESSION_PIN}"
         else:
             CURRENT_CONNECT_URL = f"{PUBLIC_TUNNEL_URL}/?id={SESSION_ID_RAW}&pin={SESSION_PIN}"
         self.update_qr_image()
-        messagebox.showinfo("비밀번호 갱신", f"새 1회용 비밀번호 [{SESSION_PIN}] 가 생성되었습니다.")
+        messagebox.showinfo("비밀번호 갱신", f"새 비밀번호 [{SESSION_PIN}] 가 설정되었습니다.\n(참고: '저장된 컴퓨터'로 등록된 스마트폰은 비밀번호 변경과 무관하게 즉시 연결됩니다.)")
 
     def check_update(self):
         msg = (

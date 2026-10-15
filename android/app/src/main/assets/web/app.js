@@ -526,7 +526,7 @@
       try {
         const msg = JSON.parse(event.data);
         if (msg.type === 'auth_success') {
-          handleAuthSuccess();
+          handleAuthSuccess(msg.payload || {});
         } else if (msg.type === 'auth_fail') {
           handleAuthFail(msg.payload?.message || '인증에 실패했습니다.');
         } else if (msg.type === 'save_pc_success') {
@@ -543,13 +543,13 @@
 
   function sendAuthPayload() {
     if (currentAuthToken) {
-      sendPayload('auth_token', { id: currentId, token: currentAuthToken });
+      sendPayload('auth_token', { token: currentAuthToken });
     } else if (currentId && currentPin) {
       sendPayload('auth', { id: currentId, pin: currentPin });
     }
   }
 
-  function handleAuthSuccess() {
+  function handleAuthSuccess(payload = {}) {
     isAuthenticated = true;
     authError.classList.add('hidden');
     authScreen.classList.add('hidden');
@@ -564,10 +564,25 @@
     sendPayload('screen_quality', { preset: currentQuality });
     setTimeout(hideTouchpadHint, 2500);
 
-    try {
-      localStorage.setItem('phonepc_last_id', currentId);
-      localStorage.setItem('phonepc_last_pin', currentPin);
-    } catch (e) {}
+    // If connected using token, keep saved PC record up to date
+    if (currentAuthToken) {
+      try {
+        let list = getSavedPcs();
+        let idx = list.findIndex((p) => p.token === currentAuthToken);
+        if (idx !== -1) {
+          if (payload.pc_name) list[idx].name = payload.pc_name;
+          if (payload.pc_id) list[idx].id = payload.pc_id;
+          if (serverHost) list[idx].host = serverHost;
+          if (serverProtocol) list[idx].proto = serverProtocol;
+          localStorage.setItem('phonepc_saved_pcs', JSON.stringify(list));
+        }
+      } catch (e) {}
+    } else {
+      try {
+        localStorage.setItem('phonepc_last_id', currentId);
+        localStorage.setItem('phonepc_last_pin', currentPin);
+      } catch (e) {}
+    }
 
     checkAppVersion();
     vibrate(40);
@@ -660,6 +675,9 @@
 
   btnDisconnect.addEventListener('click', () => {
     if (confirm('원격 제어를 종료하고 연결을 해제하시겠습니까?')) {
+      try {
+        sessionStorage.setItem('phonepc_manual_disconnect', '1');
+      } catch (e) {}
       isAuthenticated = false;
       currentAuthToken = '';
       sendPayload('release_all_keys');
@@ -895,11 +913,36 @@
       return;
     }
 
+    // Check if user explicitly clicked disconnect in this session
+    let isManualDisconnect = false;
+    try {
+      isManualDisconnect = sessionStorage.getItem('phonepc_manual_disconnect') === '1';
+    } catch (e) {}
+
+    if (!isManualDisconnect) {
+      const savedPcs = getSavedPcs();
+      if (savedPcs.length > 0) {
+        // Find matching saved PC by current host, or default to first saved PC
+        const matched = savedPcs.find((p) => p.host && location.host && p.host === location.host) || (savedPcs.length === 1 ? savedPcs[0] : null);
+        if (matched && matched.token) {
+          console.log('[AutoConnect] 등록된 컴퓨터 발견! 토큰으로 즉시 자동 연결합니다...');
+          connectWithSavedPc(matched);
+          return;
+        }
+      }
+    }
+
     try {
       const lastId = localStorage.getItem('phonepc_last_id');
-      const lastPin = localStorage.getItem('phonepc_last_pin');
-      if (lastId) inputPartnerId.value = lastId;
-      if (lastPin) inputPin.value = lastPin;
+      if (lastId && inputPartnerId) {
+        let val = lastId.replace(/\D/g, '');
+        if (val.length === 9) {
+          inputPartnerId.value = `${val.slice(0, 3)} ${val.slice(3, 6)} ${val.slice(6)}`;
+        } else {
+          inputPartnerId.value = lastId;
+        }
+      }
+      // Note: Do NOT prefill inputPin with stale expired PIN
     } catch (e) {}
   }
 
@@ -927,16 +970,16 @@
   function savePcRecord(pcRecord) {
     try {
       let list = getSavedPcs();
-      list = list.filter((p) => p.id !== pcRecord.id);
+      list = list.filter((p) => p.token !== pcRecord.token && p.id !== pcRecord.id);
       list.unshift(pcRecord);
       localStorage.setItem('phonepc_saved_pcs', JSON.stringify(list));
       renderSavedPcs();
     } catch (e) {}
   }
 
-  function deleteSavedPc(id) {
+  function deleteSavedPc(tokenOrId) {
     if (confirm('저장된 컴퓨터를 목록에서 삭제하시겠습니까?')) {
-      let list = getSavedPcs().filter((p) => p.id !== id);
+      let list = getSavedPcs().filter((p) => p.token !== tokenOrId && p.id !== tokenOrId);
       localStorage.setItem('phonepc_saved_pcs', JSON.stringify(list));
       renderSavedPcs();
     }
@@ -976,8 +1019,11 @@
 
       item.innerHTML = `
         <div class="saved-pc-info">
-          <div class="saved-pc-name">🖥️ ${escapeHtml(pc.name || '저장된 PC')}</div>
-          <div class="saved-pc-id">ID: ${escapeHtml(formattedId)} ${pc.host ? '(' + escapeHtml(pc.host) + ')' : ''}</div>
+          <div class="saved-pc-name">🖥️ ${escapeHtml(pc.name || '내 컴퓨터')}</div>
+          <div class="saved-pc-id">
+            <span class="badge-pw-free">⚡ 비번/QR 불필요</span>
+            ${pc.host ? '<span class="pc-host-tag">' + escapeHtml(pc.host) + '</span>' : ''}
+          </div>
         </div>
         <div class="saved-pc-actions">
           <button type="button" class="btn-saved-connect" title="비밀번호 없이 즉시 연결">🚀 즉시 연결</button>
@@ -992,7 +1038,7 @@
 
       item.querySelector('.btn-saved-delete').addEventListener('click', (e) => {
         e.stopPropagation();
-        deleteSavedPc(pc.id);
+        deleteSavedPc(pc.token || pc.id);
       });
 
       savedPcsList.appendChild(item);
@@ -1000,20 +1046,36 @@
   }
 
   function connectWithSavedPc(pc) {
-    if (pc.host) {
+    try {
+      if (sessionStorage) sessionStorage.removeItem('phonepc_manual_disconnect');
+    } catch (e) {}
+
+    // Priority: If current browser is already connected to the host web server (not file: and not local dummy)
+    if (location.host && location.protocol.startsWith('http') && !location.host.includes('localhost') && !location.host.includes('127.0.0.1')) {
+      serverHost = location.host;
+      serverProtocol = location.protocol;
+    } else if (pc.host) {
       serverHost = pc.host;
-      if (inputServerHost) inputServerHost.value = serverHost;
       if (pc.proto) serverProtocol = pc.proto;
-      try {
-        localStorage.setItem('phonepc_last_host', serverHost);
-        localStorage.setItem('phonepc_last_proto', serverProtocol);
-      } catch (e) {}
+    } else if (location.host && location.protocol.startsWith('http')) {
+      serverHost = location.host;
+      serverProtocol = location.protocol;
     }
-    inputPartnerId.value = pc.id && pc.id.length === 9
-      ? `${pc.id.slice(0, 3)} ${pc.id.slice(3, 6)} ${pc.id.slice(6)}`
-      : (pc.id || '');
-    inputPin.value = '';
-    connectWebSocket(pc.id, '', pc.token);
+
+    if (inputServerHost) inputServerHost.value = serverHost || '';
+    if (inputPartnerId) {
+      inputPartnerId.value = pc.id && pc.id.length === 9
+        ? `${pc.id.slice(0, 3)} ${pc.id.slice(3, 6)} ${pc.id.slice(6)}`
+        : (pc.id || '');
+    }
+    if (inputPin) inputPin.value = '';
+
+    currentId = pc.id || '';
+    currentPin = '';
+    currentAuthToken = pc.token || '';
+
+    authError.classList.add('hidden');
+    connectWebSocket(currentId, '', currentAuthToken);
   }
 
   function requestSavePc() {
