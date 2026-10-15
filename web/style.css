@@ -896,7 +896,8 @@ html, body {
   top: 50px;
   left: 8px;
   right: 8px;
-  max-width: 520px;
+  width: calc(100% - 16px);
+  max-width: calc(540px * var(--kb-width-ratio, 1.0));
   margin: 0 auto;
   background: rgba(15, 23, 42, 0.94);
   backdrop-filter: blur(16px);
@@ -906,9 +907,10 @@ html, body {
   box-shadow: 0 12px 36px rgba(0, 0, 0, 0.7);
   z-index: 70;
   transform-origin: top center;
-  transform: scale(var(--kb-scale));
+  transform: scale(var(--kb-scale, 1.0));
   opacity: var(--kb-opacity, 0.95);
   transition: opacity 0.2s ease, transform 0.1s ease-out;
+  touch-action: none;
 }
 
 #floating-keyboard.hidden {
@@ -916,7 +918,7 @@ html, body {
 }
 
 #kb-header {
-  height: 34px;
+  min-height: 34px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -927,6 +929,8 @@ html, body {
   border-top-right-radius: 14px;
   cursor: move;
   gap: 4px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 #kb-drag-handle {
@@ -955,6 +959,7 @@ html, body {
   background: rgba(0, 0, 0, 0.3);
   border-radius: 8px;
   padding: 2px;
+  flex-shrink: 0;
 }
 
 .kb-tab {
@@ -963,10 +968,11 @@ html, body {
   color: var(--text-muted);
   font-size: 10px;
   font-weight: 700;
-  padding: 3px 10px;
+  padding: 3px 8px;
   border-radius: 6px;
   cursor: pointer;
   transition: all 0.2s;
+  white-space: nowrap;
 }
 
 .kb-tab.active {
@@ -975,18 +981,23 @@ html, body {
 }
 
 #kb-scale-box,
+#kb-ratio-box,
+#kb-height-box,
 #kb-opacity-box {
   display: flex;
   align-items: center;
-  gap: 3px;
-  font-size: 10px;
+  gap: 2px;
+  font-size: 9px;
   color: var(--text-muted);
   flex-shrink: 0;
+  white-space: nowrap;
 }
 
 #kb-scale-slider,
+#kb-ratio-slider,
+#kb-height-slider,
 #kb-opacity-slider {
-  width: 44px;
+  width: 38px;
   accent-color: var(--accent-cyan);
   cursor: pointer;
 }
@@ -996,6 +1007,7 @@ html, body {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  touch-action: none;
 }
 
 .text-input-row {
@@ -1041,19 +1053,102 @@ html, body {
 
 .key-btn {
   flex: 1;
-  min-height: 32px;
+  min-height: calc(32px * var(--kb-height-ratio, 1.0));
   background: rgba(255, 255, 255, 0.08);
   border: 1px solid rgba(255, 255, 255, 0.1);
   color: var(--text-primary);
   border-radius: 5px;
-  font-size: 11px;
+  font-size: calc(11px * min(var(--kb-height-ratio, 1.0), 1.25));
   font-weight: 600;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: all 0.1s ease;
+  transition: all 0.08s ease;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+/* --------------------------------------------------------------------------
+   🎮 Game Keyboard Mode Styling (Essential Large Game Keys)
+   -------------------------------------------------------------------------- */
+#kb-layout-game {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.game-key {
+  min-height: calc(44px * var(--kb-height-ratio, 1.0));
+  font-size: calc(13px * min(var(--kb-height-ratio, 1.0), 1.25));
+  font-weight: 700;
+  border-radius: 7px;
+}
+
+.game-num-key {
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--accent-cyan);
+  font-weight: 700;
+  font-size: calc(13px * min(var(--kb-height-ratio, 1.0), 1.25));
+}
+
+.game-wasd-key {
+  background: rgba(6, 182, 212, 0.22) !important;
+  border: 1.5px solid var(--accent-cyan) !important;
+  color: #fff !important;
+  box-shadow: 0 0 12px rgba(6, 182, 212, 0.35) !important;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  line-height: 1.1;
+  padding: 2px 0;
+  flex: 1.35 !important;
+}
+
+.wasd-arrow {
+  font-size: 10px;
+  color: var(--accent-cyan);
+  opacity: 0.9;
+}
+
+.wasd-char {
+  font-weight: 800;
+  font-size: calc(16px * min(var(--kb-height-ratio, 1.0), 1.25));
+  letter-spacing: 0.5px;
+}
+
+.game-space-btn {
+  flex: 2.8 !important;
+  background: rgba(139, 92, 246, 0.25) !important;
+  border: 1.5px solid #8b5cf6 !important;
+  color: #ddd6fe !important;
+  font-weight: 800;
+  letter-spacing: 1px;
+  box-shadow: 0 0 14px rgba(139, 92, 246, 0.3) !important;
+  min-height: calc(46px * var(--kb-height-ratio, 1.0)) !important;
+}
+
+.game-mouse-btn {
+  background: rgba(16, 185, 129, 0.2) !important;
+  border: 1px solid rgba(16, 185, 129, 0.4) !important;
+  color: #6ee7b7 !important;
+  font-size: 11px !important;
+}
+
+.game-rclick-btn {
+  background: rgba(245, 158, 11, 0.2) !important;
+  border-color: rgba(245, 158, 11, 0.4) !important;
+  color: #fcd34d !important;
+}
+
+.game-shift-key, .game-ctrl-key {
+  background: rgba(59, 130, 246, 0.2) !important;
+  border-color: rgba(59, 130, 246, 0.4) !important;
+  color: #93c5fd !important;
 }
 
 .key-btn:active,

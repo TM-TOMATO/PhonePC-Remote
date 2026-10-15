@@ -6,7 +6,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>PhonePC Remote</title>
-  <link rel="stylesheet" href="style.css?v=2.2.1">
+  <link rel="stylesheet" href="style.css?v=2.2.3">
   <link rel="manifest" href="manifest.json">
   <!-- Bundled local QR Code Scanner Library (No CDN needed) -->
   <script src="jsQR.js"></script>
@@ -211,14 +211,23 @@
             <span class="drag-title">🖐️ 키보드 이동</span>
           </div>
           <div id="kb-mode-tabs">
-            <button class="kb-tab active" data-kb-mode="shortcuts">단축키</button>
+            <button class="kb-tab active" data-kb-mode="game">🎮 게임</button>
+            <button class="kb-tab" data-kb-mode="shortcuts">단축키</button>
             <button class="kb-tab" data-kb-mode="qwerty">QWERTY</button>
           </div>
-          <div id="kb-scale-box">
+          <div id="kb-scale-box" title="전체 크기 배율 조절">
             <label for="kb-scale-slider">크기</label>
-            <input type="range" id="kb-scale-slider" min="0.6" max="1.3" step="0.05" value="1.0">
+            <input type="range" id="kb-scale-slider" min="0.6" max="1.4" step="0.05" value="1.0">
           </div>
-          <div id="kb-opacity-box">
+          <div id="kb-ratio-box" title="가로 폭 비율 조절">
+            <label for="kb-ratio-slider">가로</label>
+            <input type="range" id="kb-ratio-slider" min="0.6" max="1.5" step="0.05" value="1.0">
+          </div>
+          <div id="kb-height-box" title="키 세로 높이 조절">
+            <label for="kb-height-slider">높이</label>
+            <input type="range" id="kb-height-slider" min="0.7" max="1.6" step="0.05" value="1.0">
+          </div>
+          <div id="kb-opacity-box" title="키보드 투명도 조절">
             <label for="kb-opacity-slider">투명도</label>
             <input type="range" id="kb-opacity-slider" min="0.25" max="1.0" step="0.05" value="0.95">
           </div>
@@ -232,8 +241,72 @@
             <button id="btn-send-text">전송</button>
           </div>
 
-          <!-- ===== Shortcut Layout (default) ===== -->
-          <div id="kb-layout-shortcuts">
+          <!-- ===== 🎮 1. Game Layout (Essential Large Game Keys) ===== -->
+          <div id="kb-layout-game">
+            <!-- Row 1: Number Hotbar (1-5) & System Keys -->
+            <div class="kb-row game-num-row">
+              <button class="key-btn game-key sys-esc-btn" data-key="esc">Esc</button>
+              <button class="key-btn game-key game-num-key" data-key="1">1</button>
+              <button class="key-btn game-key game-num-key" data-key="2">2</button>
+              <button class="key-btn game-key game-num-key" data-key="3">3</button>
+              <button class="key-btn game-key game-num-key" data-key="4">4</button>
+              <button class="key-btn game-key game-num-key" data-key="5">5</button>
+              <button class="key-btn game-key" data-key="tab">Tab</button>
+              <button class="key-btn game-key" data-key="m">M(지도)</button>
+            </div>
+
+            <!-- Row 2: Q, W, E, R + Dedicated Mouse Action Keys -->
+            <div class="kb-row game-main-row">
+              <button class="key-btn game-key" data-key="q">Q</button>
+              <button class="key-btn game-key game-wasd-key wasd-w" data-key="w">
+                <span class="wasd-arrow">▲</span>
+                <span class="wasd-char">W</span>
+              </button>
+              <button class="key-btn game-key" data-key="e">E</button>
+              <button class="key-btn game-key" data-key="r">R(장전)</button>
+              <button class="key-btn game-key game-mouse-btn game-lclick-btn" data-mouse="left">
+                <span class="mouse-icon">🖱️</span> L-Click
+              </button>
+              <button class="key-btn game-key game-mouse-btn game-rclick-btn" data-mouse="right">
+                <span class="mouse-icon">🖱️</span> R-Click
+              </button>
+            </div>
+
+            <!-- Row 3: A, S, D + F + Sprint / Crouch Modifiers -->
+            <div class="kb-row game-main-row">
+              <button class="key-btn game-key game-wasd-key wasd-a" data-key="a">
+                <span class="wasd-arrow">◀</span>
+                <span class="wasd-char">A</span>
+              </button>
+              <button class="key-btn game-key game-wasd-key wasd-s" data-key="s">
+                <span class="wasd-arrow">▼</span>
+                <span class="wasd-char">S</span>
+              </button>
+              <button class="key-btn game-key game-wasd-key wasd-d" data-key="d">
+                <span class="wasd-arrow">▶</span>
+                <span class="wasd-char">D</span>
+              </button>
+              <button class="key-btn game-key" data-key="f">F(동작)</button>
+              <button class="key-btn game-key game-shift-key" data-key="shift">
+                <span class="key-icon">🏃</span> Shift
+              </button>
+              <button class="key-btn game-key game-ctrl-key" data-key="ctrl">
+                <span class="key-icon">🧘</span> Ctrl
+              </button>
+            </div>
+
+            <!-- Row 4: Extra Large Jump (Space) & Crouch / Action -->
+            <div class="kb-row game-bottom-row">
+              <button class="key-btn game-key" data-key="c">C(앉기)</button>
+              <button class="key-btn game-key game-space-btn" data-key="space">
+                <span class="space-icon">⎵</span> SPACE (점프)
+              </button>
+              <button class="key-btn game-key" data-key="enter">Enter</button>
+            </div>
+          </div>
+
+          <!-- ===== 2. Shortcut Layout ===== -->
+          <div id="kb-layout-shortcuts" class="hidden">
             <!-- Special Function Keys Row -->
             <div class="kb-row">
               <button class="key-btn" data-key="esc">Esc</button>
@@ -395,13 +468,35 @@
 
             <!-- Keyboard Layout & Opacity Section -->
             <div class="settings-section">
-              <h4>⌨️ 키보드 구성 & 투명도</h4>
+              <h4>⌨️ 가상 키보드 구성, 크기 및 비율</h4>
               <div class="settings-row">
                 <label>기본 키보드 레이아웃</label>
                 <select id="settings-kb-layout">
+                  <option value="game">🎮 게임 모드 (WASD + 특대형 조작키) - 추천</option>
                   <option value="shortcuts">단축키 모드</option>
                   <option value="qwerty">QWERTY 키보드</option>
                 </select>
+              </div>
+              <div class="settings-row">
+                <label for="settings-kb-scale">전체 크기 배율</label>
+                <div class="slider-row">
+                  <input type="range" id="settings-kb-scale" min="0.6" max="1.4" step="0.05" value="1.0">
+                  <span id="settings-kb-scale-val" class="slider-val">100%</span>
+                </div>
+              </div>
+              <div class="settings-row">
+                <label for="settings-kb-ratio">가로 폭 비율</label>
+                <div class="slider-row">
+                  <input type="range" id="settings-kb-ratio" min="0.6" max="1.5" step="0.05" value="1.0">
+                  <span id="settings-kb-ratio-val" class="slider-val">100%</span>
+                </div>
+              </div>
+              <div class="settings-row">
+                <label for="settings-kb-height">키 세로 높이</label>
+                <div class="slider-row">
+                  <input type="range" id="settings-kb-height" min="0.7" max="1.6" step="0.05" value="1.0">
+                  <span id="settings-kb-height-val" class="slider-val">100%</span>
+                </div>
               </div>
               <div class="settings-row">
                 <label for="settings-kb-opacity">키보드 투명도</label>
@@ -410,6 +505,7 @@
                   <span id="kb-opacity-val" class="slider-val">95%</span>
                 </div>
               </div>
+              <p class="settings-hint">💡 게임 모드에서는 WASD 이동키와 Space(점프), Shift(달리기), 1~5번 슬롯키가 큼직하게 배치되어 격렬한 게임에서도 손쉬운 조작이 가능합니다.</p>
             </div>
 
             <!-- Trackpad Sensitivity Section -->
@@ -552,6 +648,6 @@
 
   </div>
 
-  <script src="app.js?v=2.2.2"></script>
+  <script src="app.js?v=2.2.3"></script>
 </body>
 </html>

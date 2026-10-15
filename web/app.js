@@ -224,11 +224,14 @@
   const floatingKb = document.getElementById('floating-keyboard');
   const kbDragHandle = document.getElementById('kb-drag-handle');
   const kbScaleSlider = document.getElementById('kb-scale-slider');
+  const kbRatioSlider = document.getElementById('kb-ratio-slider');
+  const kbHeightSlider = document.getElementById('kb-height-slider');
   const kbOpacitySlider = document.getElementById('kb-opacity-slider');
   const closeKbBtn = document.getElementById('close-kb-btn');
   const pcTextInput = document.getElementById('pc-text-input');
   const btnSendText = document.getElementById('btn-send-text');
 
+  const kbLayoutGame = document.getElementById('kb-layout-game');
   const kbLayoutShortcuts = document.getElementById('kb-layout-shortcuts');
   const kbLayoutQwerty = document.getElementById('kb-layout-qwerty');
   const qwertyShiftBtn = document.getElementById('qwerty-shift-btn');
@@ -249,6 +252,12 @@
   const closeSettingsBtn = document.getElementById('close-settings-btn');
   const settingsOrientation = document.getElementById('settings-orientation');
   const settingsKbLayout = document.getElementById('settings-kb-layout');
+  const settingsKbScale = document.getElementById('settings-kb-scale');
+  const settingsKbScaleVal = document.getElementById('settings-kb-scale-val');
+  const settingsKbRatio = document.getElementById('settings-kb-ratio');
+  const settingsKbRatioVal = document.getElementById('settings-kb-ratio-val');
+  const settingsKbHeight = document.getElementById('settings-kb-height');
+  const settingsKbHeightVal = document.getElementById('settings-kb-height-val');
   const settingsKbOpacity = document.getElementById('settings-kb-opacity');
   const kbOpacityVal = document.getElementById('kb-opacity-val');
   const settingsSensitivity = document.getElementById('settings-sensitivity');
@@ -1399,13 +1408,25 @@
     return null;
   }
 
+  function getTouchpadTouches(e) {
+    const list = [];
+    if (!e || !e.touches) return list;
+    for (let i = 0; i < e.touches.length; i++) {
+      const t = e.touches[i];
+      if (touchpad && touchpad.contains(t.target)) {
+        list.push(t);
+      }
+    }
+    return list;
+  }
+
   let activeTouchpadId = null;
   let touchpadTouchCount = 0;
 
   touchpad.addEventListener('touchstart', (e) => {
     hideTouchpadHint();
-    const targetTouches = e.targetTouches;
-    touchpadTouchCount = targetTouches.length;
+    const screenTouches = getTouchpadTouches(e);
+    touchpadTouchCount = screenTouches.length;
 
     // 3 fingers on screen mirror = middle click
     if (touchpadTouchCount === 3) {
@@ -1419,7 +1440,7 @@
     if (touchpadTouchCount === 2) {
       activeTouchpadId = null;
       if (isZoomMode) {
-        lastPinchDist = getPinchDistance(targetTouches);
+        lastPinchDist = getPinchDistance(screenTouches);
       } else {
         sendPayload('mouse_click', { button: 'right', action: 'click' });
         vibrate(25);
@@ -1430,7 +1451,7 @@
     if (touchpadTouchCount !== 1) return;
 
     // Exactly 1 finger on touchpad (completely independent of keyboard touches!)
-    const touch = targetTouches[0];
+    const touch = screenTouches[0];
     activeTouchpadId = touch.identifier;
     touchStartX = touch.clientX;
     touchStartY = touch.clientY;
@@ -1476,24 +1497,27 @@
       }
     }
 
-    if (dragMode) {
-      const dragBtn = clickMode || 'left';
-      sendPayload('mouse_click', { button: dragBtn, action: 'down' });
+    // RIGHT-CLICK DRAG or DRAG MODE:
+    // If Right-Click is active (clickMode === 'right') OR dragMode is ON:
+    // Immediately press down the active button so dragging rotates 3D camera or drags!
+    if (clickMode === 'right' || dragMode) {
+      const activeBtn = clickMode === 'right' ? 'right' : (clickMode || 'left');
+      sendPayload('mouse_click', { button: activeBtn, action: 'down' });
       isDraggingNow = true;
-      vibrate(25);
+      vibrate(20);
     }
 
     showRipple(touch.clientX, touch.clientY);
   }, { passive: false });
 
   touchpad.addEventListener('touchmove', (e) => {
-    const targetTouches = e.targetTouches;
-    touchpadTouchCount = targetTouches.length;
+    const screenTouches = getTouchpadTouches(e);
+    touchpadTouchCount = screenTouches.length;
 
     // Pinch-to-zoom when in Zoom Mode with 2 fingers on screen
     if (touchpadTouchCount === 2 && isZoomMode) {
       e.preventDefault();
-      const newDist = getPinchDistance(targetTouches);
+      const newDist = getPinchDistance(screenTouches);
       if (lastPinchDist > 0) {
         const scale = newDist / lastPinchDist;
         zoomLevel = Math.max(1.0, Math.min(5.0, zoomLevel * scale));
@@ -1506,9 +1530,9 @@
     if (touchpadTouchCount !== 1) return;
     e.preventDefault();
 
-    let touch = findTouchById(targetTouches, activeTouchpadId);
+    let touch = findTouchById(screenTouches, activeTouchpadId);
     if (!touch) {
-      touch = targetTouches[0];
+      touch = screenTouches[0];
       activeTouchpadId = touch.identifier;
     }
 
@@ -1526,18 +1550,14 @@
     const dx = touch.clientX - lastTouchX;
     const dy = touch.clientY - lastTouchY;
 
-    if (Math.abs(touch.clientX - touchStartX) > 4 || Math.abs(touch.clientY - touchStartY) > 4) {
+    if (Math.abs(touch.clientX - touchStartX) > 12 || Math.abs(touch.clientY - touchStartY) > 12) {
       hasMoved = true;
       hideTouchpadHint();
     }
 
-    if (touchMode === 'direct' && isScreenMirrorOn) {
-      const coords = getNormalizedCoords(touch.clientX, touch.clientY);
-      if (coords) {
-        sendPayload('mouse_move_abs', coords);
-      }
-    } else {
-      // Trackpad mode with dynamic acceleration & user-configured sensitivity
+    // In Right-Click mode (e.g. 3D camera rotation) or Trackpad mode:
+    // ALWAYS send relative mouse_move { dx, dy } with sensitivity!
+    if (clickMode === 'right' || touchMode !== 'direct') {
       const dist = Math.hypot(dx, dy);
       let accel = 1.0;
       if (dist > 8) {
@@ -1546,6 +1566,12 @@
       const moveX = dx * accel * trackpadSensitivity;
       const moveY = dy * accel * trackpadSensitivity;
       sendPayload('mouse_move', { dx: moveX, dy: moveY });
+    } else {
+      // Pure direct touch mode with left click
+      const coords = getNormalizedCoords(touch.clientX, touch.clientY);
+      if (coords) {
+        sendPayload('mouse_move_abs', coords);
+      }
     }
 
     lastTouchX = touch.clientX;
@@ -1553,13 +1579,8 @@
   }, { passive: false });
 
   function handleTouchpadTouchEnd(e) {
-    const prevCount = touchpadTouchCount;
-    const targetTouches = e.targetTouches;
-    touchpadTouchCount = targetTouches.length;
-
-    if (prevCount === 2) {
-      lastPinchDist = 0;
-    }
+    const screenTouches = getTouchpadTouches(e);
+    touchpadTouchCount = screenTouches.length;
 
     if (isPanning) {
       isPanning = false;
@@ -1570,7 +1591,7 @@
     const duration = now - touchStartTime;
 
     let endedTrackedTouch = false;
-    if (activeTouchpadId !== null) {
+    if (activeTouchpadId !== null && e.changedTouches) {
       for (let i = 0; i < e.changedTouches.length; i++) {
         if (e.changedTouches[i].identifier === activeTouchpadId) {
           endedTrackedTouch = true;
@@ -1581,17 +1602,17 @@
       endedTrackedTouch = true;
     }
 
-    if (dragMode) {
-      if (isDraggingNow && (targetTouches.length === 0 || endedTrackedTouch)) {
-        const dragBtn = clickMode || 'left';
-        sendPayload('mouse_click', { button: dragBtn, action: 'up' });
-        isDraggingNow = false;
-      }
-      if (targetTouches.length === 0) activeTouchpadId = null;
+    // Release mouse button if dragging was active (Right-click drag or dragMode)
+    if (isDraggingNow) {
+      const activeBtn = clickMode === 'right' ? 'right' : (clickMode || 'left');
+      sendPayload('mouse_click', { button: activeBtn, action: 'up' });
+      isDraggingNow = false;
+      if (screenTouches.length === 0) activeTouchpadId = null;
       return;
     }
 
-    if (!hasMoved && duration < 280 && prevCount === 1 && endedTrackedTouch) {
+    // Quick tap left-click
+    if (duration < 280 && endedTrackedTouch && screenTouches.length === 0) {
       const timeSinceLastTap = now - lastTapTime;
 
       if (timeSinceLastTap > 0 && timeSinceLastTap < 300) {
@@ -1605,12 +1626,12 @@
       }
     }
 
-    if (targetTouches.length === 0) {
+    if (screenTouches.length === 0) {
       activeTouchpadId = null;
     } else if (endedTrackedTouch) {
-      activeTouchpadId = targetTouches[0].identifier;
-      lastTouchX = targetTouches[0].clientX;
-      lastTouchY = targetTouches[0].clientY;
+      activeTouchpadId = screenTouches[0].identifier;
+      lastTouchX = screenTouches[0].clientX;
+      lastTouchY = screenTouches[0].clientY;
     }
   }
 
@@ -1689,11 +1710,55 @@
   closeKbBtn.addEventListener('click', () => toggleKeyboard(false));
 
   // Scale slider
-  kbScaleSlider.addEventListener('input', (e) => {
-    const scale = e.target.value;
-    document.documentElement.style.setProperty('--kb-scale', scale);
-    try { localStorage.setItem('phonepc_kb_scale', scale); } catch (err) {}
-  });
+  function setKeyboardScale(scale) {
+    const val = Math.max(0.5, Math.min(1.6, parseFloat(scale) || 1.0));
+    document.documentElement.style.setProperty('--kb-scale', val);
+    if (kbScaleSlider) kbScaleSlider.value = val;
+    if (settingsKbScale) settingsKbScale.value = val;
+    if (settingsKbScaleVal) settingsKbScaleVal.textContent = `${Math.round(val * 100)}%`;
+    try { localStorage.setItem('phonepc_kb_scale', val); } catch (err) {}
+  }
+
+  if (kbScaleSlider) {
+    kbScaleSlider.addEventListener('input', (e) => setKeyboardScale(e.target.value));
+  }
+  if (settingsKbScale) {
+    settingsKbScale.addEventListener('input', (e) => setKeyboardScale(e.target.value));
+  }
+
+  // Width ratio slider
+  function setKeyboardWidthRatio(ratio) {
+    const val = Math.max(0.6, Math.min(1.6, parseFloat(ratio) || 1.0));
+    document.documentElement.style.setProperty('--kb-width-ratio', val);
+    if (kbRatioSlider) kbRatioSlider.value = val;
+    if (settingsKbRatio) settingsKbRatio.value = val;
+    if (settingsKbRatioVal) settingsKbRatioVal.textContent = `${Math.round(val * 100)}%`;
+    try { localStorage.setItem('phonepc_kb_ratio', val); } catch (err) {}
+  }
+
+  if (kbRatioSlider) {
+    kbRatioSlider.addEventListener('input', (e) => setKeyboardWidthRatio(e.target.value));
+  }
+  if (settingsKbRatio) {
+    settingsKbRatio.addEventListener('input', (e) => setKeyboardWidthRatio(e.target.value));
+  }
+
+  // Height ratio slider
+  function setKeyboardHeightRatio(ratio) {
+    const val = Math.max(0.6, Math.min(1.8, parseFloat(ratio) || 1.0));
+    document.documentElement.style.setProperty('--kb-height-ratio', val);
+    if (kbHeightSlider) kbHeightSlider.value = val;
+    if (settingsKbHeight) settingsKbHeight.value = val;
+    if (settingsKbHeightVal) settingsKbHeightVal.textContent = `${Math.round(val * 100)}%`;
+    try { localStorage.setItem('phonepc_kb_height', val); } catch (err) {}
+  }
+
+  if (kbHeightSlider) {
+    kbHeightSlider.addEventListener('input', (e) => setKeyboardHeightRatio(e.target.value));
+  }
+  if (settingsKbHeight) {
+    settingsKbHeight.addEventListener('input', (e) => setKeyboardHeightRatio(e.target.value));
+  }
 
   // Opacity slider
   function setKeyboardOpacity(opacity) {
@@ -1851,6 +1916,16 @@
     const touch = e.changedTouches ? e.changedTouches[0] : e;
     const touchId = touch.identifier !== undefined ? touch.identifier : 'mouse';
 
+    // Dedicated mouse action key on game keyboard (L-Click / R-Click)
+    if (btn.dataset.mouse) {
+      const mouseBtn = btn.dataset.mouse;
+      btn.classList.add('pressed');
+      sendPayload('mouse_click', { button: mouseBtn, action: 'down' });
+      activeKeyTouches.set(touchId, { mouseBtn, btn, isMouseBtn: true });
+      vibrate(20);
+      return;
+    }
+
     // Special Shift handling (Short tap = Toggle, Long press = Hold)
     if (btn.id === 'qwerty-shift-btn' || btn.dataset.key === 'shift') {
       handleShiftTouchStart(btn);
@@ -1927,6 +2002,12 @@
       const entry = activeKeyTouches.get(touchId);
       activeKeyTouches.delete(touchId);
 
+      if (entry.isMouseBtn) {
+        sendPayload('mouse_click', { button: entry.mouseBtn, action: 'up' });
+        entry.btn.classList.remove('pressed');
+        return;
+      }
+
       if (entry.isShiftBtn) {
         handleShiftTouchEnd(btn);
         return;
@@ -1941,6 +2022,7 @@
 
   function setupKeyMultiTouch(btn) {
     btn.addEventListener('touchstart', (e) => handleKeyTouchStart(e, btn), { passive: false });
+    btn.addEventListener('touchmove', (e) => { e.preventDefault(); e.stopPropagation(); }, { passive: false });
     btn.addEventListener('touchend', (e) => handleKeyTouchEnd(e, btn), { passive: false });
     btn.addEventListener('touchcancel', (e) => handleKeyTouchEnd(e, btn), { passive: false });
 
@@ -1983,17 +2065,23 @@
   });
 
   function switchKbMode(mode) {
-    kbMode = mode;
+    kbMode = mode || 'game';
     document.querySelectorAll('.kb-tab').forEach((t) => t.classList.remove('active'));
-    document.querySelector(`.kb-tab[data-kb-mode="${mode}"]`)?.classList.add('active');
+    document.querySelector(`.kb-tab[data-kb-mode="${kbMode}"]`)?.classList.add('active');
 
-    if (mode === 'shortcuts') {
-      kbLayoutShortcuts.classList.remove('hidden');
-      kbLayoutQwerty.classList.add('hidden');
+    kbLayoutGame?.classList.add('hidden');
+    kbLayoutShortcuts?.classList.add('hidden');
+    kbLayoutQwerty?.classList.add('hidden');
+
+    if (kbMode === 'game') {
+      kbLayoutGame?.classList.remove('hidden');
+    } else if (kbMode === 'shortcuts') {
+      kbLayoutShortcuts?.classList.remove('hidden');
     } else {
-      kbLayoutShortcuts.classList.add('hidden');
-      kbLayoutQwerty.classList.remove('hidden');
+      kbLayoutQwerty?.classList.remove('hidden');
     }
+
+    try { localStorage.setItem('phonepc_kb_mode', kbMode); } catch (err) {}
   }
 
   // --------------------------------------------------------------------------
@@ -2001,7 +2089,19 @@
   // --------------------------------------------------------------------------
   function openSettings() {
     settingsModal.classList.remove('hidden');
-    settingsKbLayout.value = kbMode;
+    if (settingsKbLayout) settingsKbLayout.value = kbMode;
+    if (settingsKbScale && kbScaleSlider) {
+      settingsKbScale.value = kbScaleSlider.value;
+      if (settingsKbScaleVal) settingsKbScaleVal.textContent = `${Math.round(kbScaleSlider.value * 100)}%`;
+    }
+    if (settingsKbRatio && kbRatioSlider) {
+      settingsKbRatio.value = kbRatioSlider.value;
+      if (settingsKbRatioVal) settingsKbRatioVal.textContent = `${Math.round(kbRatioSlider.value * 100)}%`;
+    }
+    if (settingsKbHeight && kbHeightSlider) {
+      settingsKbHeight.value = kbHeightSlider.value;
+      if (settingsKbHeightVal) settingsKbHeightVal.textContent = `${Math.round(kbHeightSlider.value * 100)}%`;
+    }
     if (settingsSensitivity) settingsSensitivity.value = trackpadSensitivity;
     if (sensitivityValue) sensitivityValue.textContent = `${trackpadSensitivity.toFixed(1)}x`;
     if (settingsKbOpacity) settingsKbOpacity.value = keyboardOpacity;
@@ -2072,6 +2172,7 @@
     try {
       localStorage.setItem('phonepc_custom_shortcuts', JSON.stringify(customShortcuts));
       localStorage.setItem('phonepc_kb_layout', settingsKbLayout.value);
+      localStorage.setItem('phonepc_kb_mode', settingsKbLayout.value);
       localStorage.setItem('phonepc_sensitivity', trackpadSensitivity);
     } catch (e) {}
 
@@ -2115,10 +2216,9 @@
         customShortcuts = JSON.parse(saved);
         rebuildCustomShortcuts();
       }
-      const savedLayout = localStorage.getItem('phonepc_kb_layout');
-      if (savedLayout) {
-        switchKbMode(savedLayout);
-      }
+      const savedLayout = localStorage.getItem('phonepc_kb_layout') || localStorage.getItem('phonepc_kb_mode') || 'game';
+      switchKbMode(savedLayout);
+
       const savedSens = localStorage.getItem('phonepc_sensitivity');
       if (savedSens) {
         trackpadSensitivity = parseFloat(savedSens) || 1.0;
@@ -2130,9 +2230,16 @@
         setKeyboardOpacity(savedOpacity);
       }
       const savedScale = localStorage.getItem('phonepc_kb_scale');
-      if (savedScale && kbScaleSlider) {
-        kbScaleSlider.value = savedScale;
-        document.documentElement.style.setProperty('--kb-scale', savedScale);
+      if (savedScale) {
+        setKeyboardScale(savedScale);
+      }
+      const savedRatio = localStorage.getItem('phonepc_kb_ratio');
+      if (savedRatio) {
+        setKeyboardWidthRatio(savedRatio);
+      }
+      const savedHeight = localStorage.getItem('phonepc_kb_height');
+      if (savedHeight) {
+        setKeyboardHeightRatio(savedHeight);
       }
       const savedQuality = localStorage.getItem('phonepc_screen_quality') || 'high';
       setQualityPreset(savedQuality, false);
