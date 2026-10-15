@@ -587,6 +587,9 @@
     checkAppVersion();
     vibrate(40);
 
+    // Update PC Save button appearance in top bar
+    updateSavePcButtonUI();
+
     // Auto-save PC if requested and not already authenticated by token
     const checkAutoSavePc = document.getElementById('check-auto-save-pc');
     if (checkAutoSavePc && checkAutoSavePc.checked && !currentAuthToken) {
@@ -1078,8 +1081,38 @@
     connectWebSocket(currentId, '', currentAuthToken);
   }
 
+  function updateSavePcButtonUI() {
+    const savedList = getSavedPcs();
+    const isAlreadySaved = !!(currentAuthToken || savedList.some((p) => p.token && (p.id === currentId || (p.host && p.host === serverHost))));
+    if (btnSavePc) {
+      if (isAlreadySaved) {
+        btnSavePc.classList.remove('btn-save-highlight');
+        btnSavePc.classList.add('active');
+        const label = btnSavePc.querySelector('.toggle-label');
+        if (label) label.textContent = '저장됨';
+        const icon = btnSavePc.querySelector('.icon');
+        if (icon) icon.textContent = '✅';
+        btnSavePc.title = '이 PC는 이미 등록되어 있습니다 (비밀번호 없이 즉시 연결)';
+      } else {
+        btnSavePc.classList.add('btn-save-highlight');
+        btnSavePc.classList.remove('active');
+        const label = btnSavePc.querySelector('.toggle-label');
+        if (label) label.textContent = 'PC 저장';
+        const icon = btnSavePc.querySelector('.icon');
+        if (icon) icon.textContent = '💾';
+        btnSavePc.title = '이 컴퓨터를 등록 (다음부터 비번/QR 없이 원클릭 즉시 연결)';
+      }
+    }
+  }
+
+  let savePcTimeoutTimer = null;
   function requestSavePc() {
     if (!isAuthenticated) return;
+
+    if (currentAuthToken) {
+      alert('이미 이 컴퓨터가 "저장된 컴퓨터"로 등록되어 있습니다.\n\n다음 접속부터 비밀번호나 QR 없이 즉시 연결됩니다.');
+      return;
+    }
 
     // 1. Temporarily pause mirroring/sharing
     if (liveScreenImg) {
@@ -1101,6 +1134,18 @@
     if (navigator.userAgent.includes('Android')) devName = '안드로이드폰';
     else if (navigator.userAgent.includes('iPhone')) devName = '아이폰';
 
+    if (savePcTimeoutTimer) clearTimeout(savePcTimeoutTimer);
+    savePcTimeoutTimer = setTimeout(() => {
+      if (savePcModal && !savePcModal.classList.contains('hidden')) {
+        savePcModal.classList.add('hidden');
+        const baseOrigin = serverHost ? `${serverProtocol || 'http:'}//${serverHost}` : (location.protocol === 'file:' ? 'http://127.0.0.1:8080' : '');
+        if (liveScreenImg && isScreenMirrorOn) {
+          liveScreenImg.src = baseOrigin + '/screen_stream?t=' + Date.now();
+        }
+        alert('PC에서 본인 확인 응답 시간이 초과되었습니다.\nPC 화면에 확인 창이 나타나지 않은 경우 PC 호스트를 확인해 주세요.');
+      }
+    }, 65000);
+
     vibrate(30);
     sendPayload('request_save_pc', {
       device_id: devId,
@@ -1109,6 +1154,7 @@
   }
 
   function cancelSavePc() {
+    if (savePcTimeoutTimer) clearTimeout(savePcTimeoutTimer);
     if (savePcModal) {
       savePcModal.classList.add('hidden');
     }
@@ -1120,6 +1166,7 @@
   }
 
   function handleSavePcSuccess(payload) {
+    if (savePcTimeoutTimer) clearTimeout(savePcTimeoutTimer);
     if (savePcModal) {
       savePcModal.classList.add('hidden');
     }
@@ -1145,11 +1192,13 @@
       savedAt: Date.now()
     });
 
+    updateSavePcButtonUI();
     vibrate([50, 100, 50]);
     alert(`🎉 '${pcName}' 등록이 완료되었습니다!\n\n이제 앱 첫 화면의 [저장된 컴퓨터] 목록에서 비밀번호나 QR 없이 원클릭으로 즉시 연결할 수 있습니다.`);
   }
 
   function handleSavePcRejected(reason) {
+    if (savePcTimeoutTimer) clearTimeout(savePcTimeoutTimer);
     if (savePcModal) {
       savePcModal.classList.add('hidden');
     }

@@ -102,6 +102,28 @@ def _show_native_confirm_box(device_name):
     return res == 6  # IDYES == 6
 
 async def show_pc_confirm_dialog(device_name):
+    # 1. Try dedicated standalone Tkinter confirmation dialog subprocess (guaranteed top-most)
+    dialog_script = BASE_DIR / "confirm_dialog.py"
+    if dialog_script.exists():
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable,
+                str(dialog_script),
+                str(device_name)
+            )
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=65.0)
+                return proc.returncode == 0
+            except asyncio.TimeoutError:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                return False
+        except Exception as e:
+            print(f"[Confirm] Subprocess dialog error, falling back to GUI root: {e}")
+
+    # 2. Try GUI root popup if available
     global gui_root
     loop = asyncio.get_running_loop()
     if gui_root:
