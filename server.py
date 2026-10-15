@@ -415,6 +415,11 @@ async def websocket_handler(request):
                         dy = float(payload.get("dy", 0))
                         controller.mouse_move(dx, dy)
 
+                    elif msg_type == "mouse_move_abs":
+                        rx = float(payload.get("rx", 0))
+                        ry = float(payload.get("ry", 0))
+                        controller.mouse_move_abs(rx, ry)
+
                     elif msg_type == "mouse_click":
                         button = payload.get("button", "left")
                         action = payload.get("action", "click")

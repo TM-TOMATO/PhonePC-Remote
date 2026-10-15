@@ -1391,23 +1391,35 @@
     }, 250);
   }
 
-  let activeTouchpadTouches = 0;
+  function findTouchById(touchList, id) {
+    if (id === null || id === undefined || !touchList) return null;
+    for (let i = 0; i < touchList.length; i++) {
+      if (touchList[i].identifier === id) return touchList[i];
+    }
+    return null;
+  }
+
+  let activeTouchpadId = null;
+  let touchpadTouchCount = 0;
 
   touchpad.addEventListener('touchstart', (e) => {
     hideTouchpadHint();
-    activeTouchpadTouches = e.touches.length;
+    const targetTouches = e.targetTouches;
+    touchpadTouchCount = targetTouches.length;
 
-    // 3 fingers = middle click
-    if (activeTouchpadTouches === 3) {
+    // 3 fingers on screen mirror = middle click
+    if (touchpadTouchCount === 3) {
+      activeTouchpadId = null;
       sendPayload('mouse_click', { button: 'middle', action: 'click' });
       vibrate(25);
       return;
     }
 
-    // 2 fingers
-    if (activeTouchpadTouches === 2) {
+    // 2 fingers on screen mirror
+    if (touchpadTouchCount === 2) {
+      activeTouchpadId = null;
       if (isZoomMode) {
-        lastPinchDist = getPinchDistance(e.touches);
+        lastPinchDist = getPinchDistance(targetTouches);
       } else {
         sendPayload('mouse_click', { button: 'right', action: 'click' });
         vibrate(25);
@@ -1415,9 +1427,11 @@
       return;
     }
 
-    if (activeTouchpadTouches !== 1) return;
+    if (touchpadTouchCount !== 1) return;
 
-    const touch = e.touches[0];
+    // Exactly 1 finger on touchpad (completely independent of keyboard touches!)
+    const touch = targetTouches[0];
+    activeTouchpadId = touch.identifier;
     touchStartX = touch.clientX;
     touchStartY = touch.clientY;
     lastTouchX = touch.clientX;
@@ -1463,7 +1477,8 @@
     }
 
     if (dragMode) {
-      sendPayload('mouse_click', { button: 'left', action: 'down' });
+      const dragBtn = clickMode || 'left';
+      sendPayload('mouse_click', { button: dragBtn, action: 'down' });
       isDraggingNow = true;
       vibrate(25);
     }
@@ -1472,12 +1487,13 @@
   }, { passive: false });
 
   touchpad.addEventListener('touchmove', (e) => {
-    activeTouchpadTouches = e.touches.length;
+    const targetTouches = e.targetTouches;
+    touchpadTouchCount = targetTouches.length;
 
-    // Pinch-to-zoom when in Zoom Mode
-    if (activeTouchpadTouches === 2 && isZoomMode) {
+    // Pinch-to-zoom when in Zoom Mode with 2 fingers on screen
+    if (touchpadTouchCount === 2 && isZoomMode) {
       e.preventDefault();
-      const newDist = getPinchDistance(e.touches);
+      const newDist = getPinchDistance(targetTouches);
       if (lastPinchDist > 0) {
         const scale = newDist / lastPinchDist;
         zoomLevel = Math.max(1.0, Math.min(5.0, zoomLevel * scale));
@@ -1487,10 +1503,14 @@
       return;
     }
 
-    if (activeTouchpadTouches !== 1) return;
+    if (touchpadTouchCount !== 1) return;
     e.preventDefault();
 
-    const touch = e.touches[0];
+    let touch = findTouchById(targetTouches, activeTouchpadId);
+    if (!touch) {
+      touch = targetTouches[0];
+      activeTouchpadId = touch.identifier;
+    }
 
     // Panning when in Zoom Mode and zoomed
     if (isPanning && isZoomMode && zoomLevel > 1.01) {
@@ -1532,9 +1552,10 @@
     lastTouchY = touch.clientY;
   }, { passive: false });
 
-  touchpad.addEventListener('touchend', (e) => {
-    const prevCount = activeTouchpadTouches;
-    activeTouchpadTouches = e.touches.length;
+  function handleTouchpadTouchEnd(e) {
+    const prevCount = touchpadTouchCount;
+    const targetTouches = e.targetTouches;
+    touchpadTouchCount = targetTouches.length;
 
     if (prevCount === 2) {
       lastPinchDist = 0;
@@ -1548,15 +1569,29 @@
     const now = Date.now();
     const duration = now - touchStartTime;
 
+    let endedTrackedTouch = false;
+    if (activeTouchpadId !== null) {
+      for (let i = 0; i < e.changedTouches.length; i++) {
+        if (e.changedTouches[i].identifier === activeTouchpadId) {
+          endedTrackedTouch = true;
+          break;
+        }
+      }
+    } else {
+      endedTrackedTouch = true;
+    }
+
     if (dragMode) {
-      if (isDraggingNow) {
-        sendPayload('mouse_click', { button: 'left', action: 'up' });
+      if (isDraggingNow && (targetTouches.length === 0 || endedTrackedTouch)) {
+        const dragBtn = clickMode || 'left';
+        sendPayload('mouse_click', { button: dragBtn, action: 'up' });
         isDraggingNow = false;
       }
+      if (targetTouches.length === 0) activeTouchpadId = null;
       return;
     }
 
-    if (!hasMoved && duration < 280 && prevCount === 1) {
+    if (!hasMoved && duration < 280 && prevCount === 1 && endedTrackedTouch) {
       const timeSinceLastTap = now - lastTapTime;
 
       if (timeSinceLastTap > 0 && timeSinceLastTap < 300) {
@@ -1569,7 +1604,18 @@
         lastTapTime = now;
       }
     }
-  }, { passive: false });
+
+    if (targetTouches.length === 0) {
+      activeTouchpadId = null;
+    } else if (endedTrackedTouch) {
+      activeTouchpadId = targetTouches[0].identifier;
+      lastTouchX = targetTouches[0].clientX;
+      lastTouchY = targetTouches[0].clientY;
+    }
+  }
+
+  touchpad.addEventListener('touchend', handleTouchpadTouchEnd, { passive: false });
+  touchpad.addEventListener('touchcancel', handleTouchpadTouchEnd, { passive: false });
 
   // --------------------------------------------------------------------------
   // Virtual Scroll Wheel Panel
@@ -1588,16 +1634,20 @@
 
   closeScrollBtn.addEventListener('click', () => toggleScrollPanel(false));
 
+  scrollPanel.addEventListener('touchstart', (e) => e.stopPropagation(), { passive: true });
+
   wheelTrack.addEventListener('touchstart', (e) => {
-    if (e.touches.length !== 1) return;
-    lastWheelY = e.touches[0].clientY;
+    e.stopPropagation();
+    if (e.targetTouches.length !== 1) return;
+    lastWheelY = e.targetTouches[0].clientY;
   }, { passive: true });
 
   wheelTrack.addEventListener('touchmove', (e) => {
-    if (e.touches.length !== 1) return;
+    e.stopPropagation();
+    if (e.targetTouches.length !== 1) return;
     e.preventDefault();
 
-    const currentY = e.touches[0].clientY;
+    const currentY = e.targetTouches[0].clientY;
     const dy = currentY - lastWheelY;
 
     if (Math.abs(dy) >= 6) {
@@ -1663,18 +1713,23 @@
   }
 
   // Keyboard window dragging
+  let activeKbDragTouchId = null;
+
   kbDragHandle.addEventListener('touchstart', (e) => {
-    if (e.touches.length !== 1) return;
+    e.stopPropagation();
+    if (e.targetTouches.length !== 1) return;
     isKbDragging = true;
-    const touch = e.touches[0];
+    const touch = e.targetTouches[0];
+    activeKbDragTouchId = touch.identifier;
     const rect = floatingKb.getBoundingClientRect();
     kbOffsetLeft = touch.clientX - rect.left;
     kbOffsetTop = touch.clientY - rect.top;
   }, { passive: true });
 
   window.addEventListener('touchmove', (e) => {
-    if (!isKbDragging || e.touches.length !== 1) return;
-    const touch = e.touches[0];
+    if (!isKbDragging) return;
+    const touch = findTouchById(e.touches, activeKbDragTouchId);
+    if (!touch) return;
     const newLeft = touch.clientX - kbOffsetLeft;
     const newTop = touch.clientY - kbOffsetTop;
 
@@ -1687,9 +1742,27 @@
     floatingKb.style.margin = '0';
   }, { passive: true });
 
-  window.addEventListener('touchend', () => {
-    isKbDragging = false;
+  window.addEventListener('touchend', (e) => {
+    if (!isKbDragging) return;
+    if (activeKbDragTouchId !== null && e.changedTouches) {
+      for (let i = 0; i < e.changedTouches.length; i++) {
+        if (e.changedTouches[i].identifier === activeKbDragTouchId) {
+          isKbDragging = false;
+          activeKbDragTouchId = null;
+          break;
+        }
+      }
+    } else {
+      isKbDragging = false;
+    }
   }, { passive: true });
+
+  ['touchstart', 'touchend', 'touchcancel'].forEach((evt) => {
+    floatingKb.addEventListener(evt, (e) => {
+      if (e.target === pcTextInput || e.target === kbScaleSlider || e.target === kbOpacitySlider) return;
+      e.stopPropagation();
+    }, { passive: false });
+  });
 
   function submitTextInput() {
     const text = pcTextInput.value;
@@ -1774,6 +1847,7 @@
 
   function handleKeyTouchStart(e, btn) {
     e.preventDefault();
+    e.stopPropagation();
     const touch = e.changedTouches ? e.changedTouches[0] : e;
     const touchId = touch.identifier !== undefined ? touch.identifier : 'mouse';
 
@@ -1845,6 +1919,7 @@
 
   function handleKeyTouchEnd(e, btn) {
     e.preventDefault();
+    e.stopPropagation();
     const touch = e.changedTouches ? e.changedTouches[0] : e;
     const touchId = touch.identifier !== undefined ? touch.identifier : 'mouse';
 
@@ -2147,9 +2222,12 @@
   }
 
   // Circular drag-to-rotate handling
+  let activeRotTouchId = null;
+
   function onRadialTouchStart(e) {
     if (!isRadialOpen) return;
-    const touch = e.touches ? e.touches[0] : e;
+    const touch = e.changedTouches ? e.changedTouches[0] : (e.touches ? e.touches[0] : e);
+    activeRotTouchId = touch.identifier !== undefined ? touch.identifier : null;
     const fabRect = mainMenuFab.getBoundingClientRect();
     const cx = fabRect.left + fabRect.width / 2;
     const cy = fabRect.top + fabRect.height / 2;
@@ -2164,7 +2242,11 @@
 
   function onRadialTouchMove(e) {
     if (!isRotatingRadial || !isRadialOpen) return;
-    const touch = e.touches ? e.touches[0] : e;
+    let touch = null;
+    if (activeRotTouchId !== null && e.touches) {
+      touch = findTouchById(e.touches, activeRotTouchId);
+    }
+    if (!touch) touch = e.touches ? e.touches[0] : e;
     const fabRect = mainMenuFab.getBoundingClientRect();
     const cx = fabRect.left + fabRect.width / 2;
     const cy = fabRect.top + fabRect.height / 2;
@@ -2183,7 +2265,18 @@
 
   function onRadialTouchEnd(e) {
     if (!isRotatingRadial) return;
+    if (activeRotTouchId !== null && e.changedTouches) {
+      let ended = false;
+      for (let i = 0; i < e.changedTouches.length; i++) {
+        if (e.changedTouches[i].identifier === activeRotTouchId) {
+          ended = true;
+          break;
+        }
+      }
+      if (!ended) return;
+    }
     isRotatingRadial = false;
+    activeRotTouchId = null;
     radialItems.classList.remove('dragging');
 
     if (rotHasMoved) {

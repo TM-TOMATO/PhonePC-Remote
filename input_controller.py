@@ -27,6 +27,7 @@ user32 = ctypes.windll.user32
 class InputController:
     def __init__(self):
         self.is_dragging = False
+        self.pressed_keys = set()
 
     def mouse_move(self, dx: float, dy: float):
         """Ultra-fast relative mouse movement via Windows API"""
@@ -119,6 +120,7 @@ class InputController:
         target = self._resolve_key(key)
         try:
             pyautogui.keyDown(target)
+            self.pressed_keys.add(target)
         except Exception:
             pass
 
@@ -127,16 +129,19 @@ class InputController:
         target = self._resolve_key(key)
         try:
             pyautogui.keyUp(target)
+            self.pressed_keys.discard(target)
         except Exception:
             pass
 
     def release_all_keys(self):
-        """Release common modifier keys to prevent keys from being stuck"""
-        for k in ["ctrl", "alt", "shift", "win"]:
+        """Release all pressed and modifier keys to prevent keys from being stuck"""
+        all_keys = list(self.pressed_keys) + ["ctrl", "alt", "shift", "win"]
+        for k in all_keys:
             try:
                 pyautogui.keyUp(k)
             except Exception:
                 pass
+        self.pressed_keys.clear()
 
     def key_press(self, key: str, modifiers: list = None):
         """Press a key or key combination"""
