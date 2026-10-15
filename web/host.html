@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PhonePC Remote - 호스트 PC 제어 센터</title>
+  <style>
+    :root {
+      --bg: #090d16;
+      --card-bg: rgba(22, 30, 49, 0.85);
+      --border: rgba(255, 255, 255, 0.12);
+      --accent-blue: #0284c7;
+      --accent-cyan: #06b6d4;
+      --accent-green: #10b981;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+    }
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    body {
+      background: radial-gradient(circle at 50% 20%, #172554 0%, #090d16 80%);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .container {
+      width: 100%;
+      max-width: 780px;
+      background: var(--card-bg);
+      backdrop-filter: blur(16px);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6);
+      overflow: hidden;
+    }
+    .header {
+      padding: 24px 30px;
+      background: rgba(255, 255, 255, 0.03);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .header-title {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .logo-icon {
+      font-size: 28px;
+    }
+    .title-text h1 {
+      font-size: 20px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+    }
+    .title-text p {
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+    .status-badge {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(255, 255, 255, 0.06);
+      padding: 6px 14px;
+      border-radius: 20px;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+    }
+    .dot.waiting {
+      background: #eab308;
+      box-shadow: 0 0 10px #eab308;
+    }
+    .dot.connected {
+      background: var(--accent-green);
+      box-shadow: 0 0 10px var(--accent-green);
+    }
+    .content-grid {
+      display: grid;
+      grid-template-columns: 1.2fr 1fr;
+      gap: 30px;
+      padding: 30px;
+    }
+    @media (max-width: 680px) {
+      .content-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+    .info-card {
+      background: rgba(0, 0, 0, 0.3);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 20px;
+      margin-bottom: 16px;
+    }
+    .info-label {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 8px;
+    }
+    .info-value-box {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .info-value {
+      font-size: 28px;
+      font-weight: 800;
+      font-family: monospace;
+      letter-spacing: 2px;
+      color: var(--accent-cyan);
+    }
+    .info-value.pin {
+      color: #38bdf8;
+    }
+    .copy-btn {
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 6px 12px;
+      border-radius: 8px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .copy-btn:hover {
+      background: var(--accent-blue);
+    }
+    .qr-card {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 24px;
+      text-align: center;
+    }
+    .qr-img-wrapper {
+      background: #ffffff;
+      padding: 12px;
+      border-radius: 12px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+      margin-bottom: 14px;
+    }
+    .qr-img-wrapper img {
+      width: 170px;
+      height: 170px;
+      display: block;
+    }
+    .qr-desc {
+      font-size: 13px;
+      color: var(--text-muted);
+      line-height: 1.5;
+    }
+    .footer {
+      padding: 18px 30px;
+      background: rgba(0, 0, 0, 0.2);
+      border-top: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+    .url-tag {
+      color: var(--accent-cyan);
+      font-weight: 600;
+      text-decoration: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="header-title">
+        <span class="logo-icon">🖥️</span>
+        <div class="title-text">
+          <h1>PhonePC Remote</h1>
+          <p>원격 제어 대기 중 (TeamViewer 스타일)</p>
+        </div>
+      </div>
+      <div class="status-badge">
+        <span id="host-status-dot" class="dot waiting"></span>
+        <span id="host-status-text">연결 대기 중</span>
+      </div>
+    </div>
+
+    <div class="content-grid">
+      <!-- Left Column: ID & Password -->
+      <div class="left-col">
+        <div class="info-card">
+          <div class="info-label">파트너 접속 ID</div>
+          <div class="info-value-box">
+            <span id="display-id" class="info-value">--- --- ---</span>
+            <button class="copy-btn" onclick="copyText('display-id')">복사</button>
+          </div>
+        </div>
+
+        <div class="info-card">
+          <div class="info-label">1회용 접속 비밀번호 (PIN)</div>
+          <div class="info-value-box">
+            <span id="display-pin" class="info-value pin">----</span>
+            <button class="copy-btn" onclick="copyText('display-pin')">복사</button>
+          </div>
+        </div>
+
+        <div style="font-size: 12px; color: var(--text-muted); line-height: 1.6; padding: 0 4px;">
+          💡 <strong>스마트폰 앱에서 연결하는 방법:</strong><br>
+          1. 스마트폰에서 <strong>QR 코드를 스캔</strong>하면 암호 입력 없이 즉시 연결됩니다.<br>
+          2. 또는 스마트폰 앱에 위의 <strong>ID</strong>와 <strong>비밀번호</strong>를 입력하세요.
+        </div>
+
+        <!-- PC & Mobile Version / Update Center Card -->
+        <div class="info-card" style="margin-top: 14px; border-color: rgba(6, 182, 212, 0.35);">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+            <div class="info-label" style="margin-bottom: 0;">PC & 모바일 버전 업데이트</div>
+            <span id="host-version-badge" style="background: rgba(6, 182, 212, 0.15); color: #38bdf8; padding: 2px 8px; border-radius: 6px; font-size: 11px; font-weight: 700;">v2.2.0</span>
+          </div>
+          <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px; line-height: 1.5;">
+            최신 업데이트를 확인하고 PC 설치 파일(Setup) 또는 스마트폰용 앱(APK)을 직접 다운로드할 수 있습니다.
+          </p>
+          <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+            <button type="button" id="btn-check-host-update" class="copy-btn" style="flex: 1; min-width: 130px; padding: 9px 12px; font-weight: 700; background: rgba(6, 182, 212, 0.2); border-color: var(--accent-cyan); color: #38bdf8;" onclick="checkHostUpdate()">
+              🔄 최신 버전 확인
+            </button>
+            <a href="/download/setup" class="copy-btn" style="flex: 1; min-width: 130px; padding: 9px 12px; font-weight: 700; text-decoration: none; text-align: center; background: rgba(59, 130, 246, 0.2); border-color: var(--accent-blue); color: #60a5fa;" title="Windows 설치 프로그램(Setup.exe) 다운로드">
+              💻 PC 설치 파일 (Setup)
+            </a>
+            <a href="/download/apk" class="copy-btn" style="flex: 1; min-width: 130px; padding: 9px 12px; font-weight: 700; text-decoration: none; text-align: center; background: rgba(16, 185, 129, 0.2); border-color: var(--accent-green); color: #34d399;" title="안드로이드 전용 앱(APK) 다운로드">
+              📲 안드로이드 APK
+            </a>
+          </div>
+          <div id="host-update-status" style="font-size: 11px; color: #94a3b8; margin-top: 8px; text-align: center;"></div>
+        </div>
+      </div>
+
+      <!-- Right Column: QR Code -->
+      <div class="right-col">
+        <div class="qr-card">
+          <div class="qr-img-wrapper">
+            <img id="qr-image" src="/qr.png" alt="연결용 QR 코드">
+          </div>
+          <p class="qr-desc">
+            스마트폰 카메라로 스캔하면<br>
+            <strong>원터치로 즉시 페어링</strong>됩니다.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer">
+      <span>접속 주소: <a id="connect-url" class="url-tag" href="#" target="_blank">로딩 중...</a></span>
+      <span id="connected-client-info">연결된 기기: 없음</span>
+    </div>
+  </div>
+
+  <script>
+    async function loadInfo() {
+      try {
+        const res = await fetch('/api/session-info');
+        const data = await res.json();
+        document.getElementById('display-id').textContent = data.formatted_id;
+        document.getElementById('display-pin').textContent = data.pin;
+        document.getElementById('connect-url').textContent = data.url;
+        document.getElementById('connect-url').href = data.url;
+        document.getElementById('qr-image').src = '/qr.png?t=' + Date.now();
+      } catch (err) {}
+    }
+
+    function copyText(elemId) {
+      const text = document.getElementById(elemId).textContent;
+      navigator.clipboard.writeText(text.replace(/\s+/g, ''));
+      alert('복사되었습니다: ' + text);
+    }
+
+    async function checkHostUpdate() {
+      const statusEl = document.getElementById('host-update-status');
+      const btn = document.getElementById('btn-check-host-update');
+      if (btn) btn.textContent = '⏳ 확인 중...';
+      if (statusEl) statusEl.textContent = '최신 버전 정보를 서버에서 확인하고 있습니다...';
+      try {
+        const res = await fetch('/api/version?t=' + Date.now(), { cache: 'no-store' });
+        const data = await res.json();
+        const badge = document.getElementById('host-version-badge');
+        if (badge) badge.textContent = `v${data.version}`;
+        if (statusEl) {
+          statusEl.innerHTML = `✅ 현재 최신 버전(v${data.version})이 실행 중입니다. 필요 시 위 버튼으로 최신 Setup.exe 또는 APK를 받으실 수 있습니다.`;
+          statusEl.style.color = '#10b981';
+        }
+      } catch (e) {
+        if (statusEl) {
+          statusEl.innerHTML = '⚠️ 버전 정보를 불러오지 못했습니다.';
+          statusEl.style.color = '#f87171';
+        }
+      } finally {
+        if (btn) btn.textContent = '🔄 최신 버전 확인';
+      }
+    }
+
+    // Connect WebSocket for live host status monitoring
+    function initHostMonitor() {
+      const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const ws = new WebSocket(`${protocol}//${location.host}/ws?role=host`);
+
+      ws.onmessage = (e) => {
+        try {
+          const msg = JSON.parse(e.data);
+          if (msg.type === 'client_status') {
+            const isConnected = msg.payload.connected;
+            const dot = document.getElementById('host-status-dot');
+            const text = document.getElementById('host-status-text');
+            const clientInfo = document.getElementById('connected-client-info');
+
+            if (isConnected) {
+              dot.className = 'dot connected';
+              text.textContent = '스마트폰 연결됨';
+              clientInfo.textContent = '연결된 기기: ' + (msg.payload.client || '모바일');
+            } else {
+              dot.className = 'dot waiting';
+              text.textContent = '연결 대기 중';
+              clientInfo.textContent = '연결된 기기: 없음';
+            }
+          }
+        } catch (err) {}
+      };
+
+      ws.onclose = () => {
+        setTimeout(initHostMonitor, 2000);
+      };
+    }
+
+    loadInfo();
+    initHostMonitor();
+  </script>
+</body>
+</html>

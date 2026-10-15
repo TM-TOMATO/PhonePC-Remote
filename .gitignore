@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+
+# Executables & large binaries
+*.exe
+dist/
+build/
+build_apk/
+*.spec
+
+# Logs & temporary session files
+*.log
+tunnel_*.log
+trusted_devices.json
+
+# Node
+node_modules/
+
+# OS specific
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.idea/
+*.iml
+
+# Android build cache
+android/.gradle/
+android/app/build/
+android/local.properties
+*.idsig

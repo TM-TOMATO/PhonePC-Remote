@@ -1,0 +1,557 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>PhonePC Remote</title>
+  <link rel="stylesheet" href="style.css?v=2.2.1">
+  <link rel="manifest" href="manifest.json">
+  <!-- Bundled local QR Code Scanner Library (No CDN needed) -->
+  <script src="jsQR.js"></script>
+</head>
+<body>
+  <div id="app">
+
+    <!-- ====================================================================
+         1. TeamViewer-Style Connection Hub (Auth Screen)
+         ==================================================================== -->
+    <div id="auth-screen">
+      <div class="auth-card">
+        <div class="auth-header">
+          <div class="auth-logo">📱 ⮂ 🖥️</div>
+          <h2>PhonePC Remote</h2>
+          <p>원격 제어할 컴퓨터에 연결하세요</p>
+        </div>
+
+        <!-- Saved Trusted Computers Section (1-Click Passwordless Connect) -->
+        <div id="saved-pcs-container" class="saved-pcs-card">
+          <div class="saved-pcs-header">
+            <span>💾 저장된 컴퓨터 (원클릭 즉시 연결)</span>
+            <span class="badge-trusted">인증됨</span>
+          </div>
+          <div id="saved-pcs-list" class="saved-pcs-list"></div>
+        </div>
+
+        <!-- Method 1: Scan QR Code Button -->
+        <button id="btn-open-scanner" class="btn-primary-scan">
+          <span class="scan-icon">📷</span> QR 코드로 연결 (카메라 스캔)
+        </button>
+
+        <div class="divider">
+          <span>또는 파트너 ID로 연결</span>
+        </div>
+
+        <!-- Method 2: Manual ID & PIN Form -->
+        <form id="auth-form">
+          <div class="form-group" id="group-server-host">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+              <label for="input-server-host" style="margin-bottom:0;">PC 주소 (Wi-Fi IP / 터널)</label>
+              <span style="font-size:10px; color:#38bdf8;">📷 QR 스캔 시 자동 설정</span>
+            </div>
+            <input type="text" id="input-server-host" placeholder="예: 192.168.0.2:8080 또는 xxx.trycloudflare.com" autocomplete="off">
+          </div>
+
+          <div class="form-group">
+            <label for="input-partner-id">파트너 ID (9자리)</label>
+            <input type="text" id="input-partner-id" placeholder="예: 849 203 118" maxlength="11" autocomplete="off" inputmode="numeric">
+          </div>
+
+          <div class="form-group">
+            <label for="input-pin">비밀번호 (PIN 4자리)</label>
+            <input type="password" id="input-pin" placeholder="예: 7182" maxlength="4" autocomplete="off" inputmode="numeric">
+          </div>
+
+          <div class="form-check-save">
+            <label class="checkbox-label" for="check-auto-save-pc">
+              <input type="checkbox" id="check-auto-save-pc">
+              <span>💾 연결 시 이 PC를 '저장된 컴퓨터'로 자동 등록</span>
+            </label>
+          </div>
+
+          <div id="auth-error" class="auth-error-msg hidden"></div>
+
+          <button type="submit" id="btn-submit-auth" class="btn-submit-connect">
+            🚀 원격 제어 시작
+          </button>
+        </form>
+
+        <div class="auth-footer-help">
+          💡 PC 화면의 <strong>Host 대시보드</strong> 또는 터미널에 표시된 ID와 비밀번호를 입력하거나 QR 코드를 스캔하세요.
+        </div>
+
+        <div class="auth-update-section">
+          <div class="auth-update-btn-row">
+            <button type="button" id="btn-auth-update" class="btn-auth-update" title="최신 버전 확인 및 캐시 갱신">
+              🔄 앱 업데이트
+            </button>
+            <a href="/download/apk" id="btn-auth-apk" class="btn-auth-apk" title="안드로이드 APK 직접 다운로드">
+              📲 APK 다운로드
+            </a>
+          </div>
+          <div id="auth-app-version" class="auth-version-text">
+            PhonePC Remote v2.2.0
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Camera QR Scanner Modal Overlay -->
+    <div id="camera-scanner-modal" class="hidden">
+      <div class="scanner-header">
+        <span>📷 PC 화면의 QR 코드를 비추세요</span>
+        <div class="scanner-header-actions">
+          <button type="button" id="btn-toggle-camera-fit" class="btn-scanner-fit" title="화면 맞춤 방식 변경">📐 비율</button>
+          <button type="button" id="btn-close-scanner" class="btn-scanner-close" title="닫기">✖</button>
+        </div>
+      </div>
+      <div class="video-container">
+        <video id="qr-video" playsinline autoplay muted></video>
+        <canvas id="qr-canvas" class="hidden"></canvas>
+        <div class="scan-target-box">
+          <span class="corner top-right"></span>
+          <span class="corner bottom-left"></span>
+          <div class="scan-line"></div>
+        </div>
+      </div>
+      <div class="scanner-footer">
+        <p id="scanner-status-text">QR 코드가 사각형 안에 들어오면 자동으로 인식됩니다.</p>
+        <input type="file" id="qr-file-input" accept="image/*" capture="environment" class="hidden">
+        <button type="button" id="btn-camera-fallback" class="btn-camera-fallback">
+          📷 카메라 앱으로 직접 촬영 / 사진 선택
+        </button>
+      </div>
+    </div>
+
+    <!-- ====================================================================
+         2. Main Remote Controller Screen
+         ==================================================================== -->
+    <div id="controller-screen" class="hidden">
+      <!-- Top Status Bar & Quick Toggles -->
+      <header id="top-bar">
+        <div class="status-indicator">
+          <button id="btn-disconnect" class="btn-icon-disconnect" title="연결 해제 / PC 변경">🔌</button>
+          <span id="conn-dot" class="dot red"></span>
+          <span id="conn-text">연결 중...</span>
+          <span id="ping-text" class="ping">--ms</span>
+        </div>
+
+        <div class="toggle-group">
+          <button id="btn-save-pc" class="btn-toggle btn-save-highlight" title="이 컴퓨터를 '저장된 기기'로 등록 (다음부터 비번/QR 없이 원클릭 연결)">
+            <span class="icon">💾</span> <span class="toggle-label">PC 저장</span>
+          </button>
+          <button id="toggle-screen-stream" class="btn-toggle active" title="화면 공유 켜기/끄기">
+            <span class="icon">🖥️</span> <span class="toggle-label">화면</span>
+          </button>
+          <button id="toggle-audio" class="btn-toggle" title="PC 소리 공유 켜기/끄기">
+            <span class="icon">🔊</span> <span class="toggle-label">소리</span>
+          </button>
+          <button id="toggle-touch-mode" class="btn-toggle active" title="직접 터치 / 트랙패드 전환">
+            <span class="icon">🎯</span> <span class="toggle-label">직접터치</span>
+          </button>
+          <button id="toggle-zoom" class="btn-toggle" title="확대 도구 ON/OFF">
+            <span class="icon">🔍</span> <span class="toggle-label">확대</span>
+          </button>
+          <button id="toggle-quality" class="btn-toggle" title="화면 화질 변경 (클릭 시 고화질/초고화질/일반 순환)">
+            <span id="quality-icon" class="icon">✨</span> <span id="quality-status-badge" class="toggle-label">FHD</span>
+          </button>
+          <button id="toggle-lclick" class="btn-toggle active" title="좌클릭 토글">
+            <span class="icon">🖱️</span> <span class="toggle-label">L</span>
+          </button>
+          <button id="toggle-rclick" class="btn-toggle" title="우클릭 토글">
+            <span class="icon">🖱️</span> <span class="toggle-label">R</span>
+          </button>
+          <button id="toggle-drag" class="btn-toggle btn-drag" title="드래그 모드 ON/OFF">
+            <span class="icon">✋</span> <span class="toggle-label">드래그</span> <span id="drag-status-badge" class="badge">OFF</span>
+          </button>
+          <button id="btn-install-pwa" class="btn-toggle btn-install hidden" title="휴대폰에 앱으로 설치">
+            <span class="icon">📲</span> <span class="toggle-label">앱 설치</span>
+          </button>
+        </div>
+      </header>
+
+      <!-- Main Touchpad Area with Live PC Screen Mirror -->
+      <main id="touchpad">
+        <div id="screen-viewport">
+          <div id="zoom-wrapper">
+            <img id="live-screen-img" src="" alt="실시간 PC 화면" draggable="false" />
+          </div>
+        </div>
+        <div id="touchpad-hint">
+          <div class="hint-icon">👆</div>
+          <p class="hint-main">터치하여 PC 화면 조작</p>
+          <p class="hint-sub">화면의 원하는 곳을 콕 찍어 클릭 | 빠르게 2번 탭: 더블클릭</p>
+        </div>
+        <!-- Touch Ripple Indicator -->
+        <div id="touch-ripple" class="ripple hidden"></div>
+      </main>
+
+      <!-- Right-Side Virtual Scroll Wheel (Toggleable) -->
+      <aside id="scroll-wheel-panel" class="hidden">
+        <button id="close-scroll-btn" class="close-btn" title="스크롤 닫기">✖</button>
+        <div class="wheel-guide-up">▲ 위로</div>
+        <div id="wheel-track">
+          <div class="wheel-ribs">
+            <span></span><span></span><span></span><span></span><span></span>
+          </div>
+          <div class="wheel-thumb">📜</div>
+          <div class="wheel-ribs">
+            <span></span><span></span><span></span><span></span><span></span>
+          </div>
+        </div>
+        <div class="wheel-guide-down">▼ 아래로</div>
+      </aside>
+
+      <!-- Floating Draggable & Resizable Keyboard Window -->
+      <section id="floating-keyboard" class="hidden">
+        <div id="kb-header">
+          <div id="kb-drag-handle">
+            <span class="drag-icon">⋮⋮</span>
+            <span class="drag-title">🖐️ 키보드 이동</span>
+          </div>
+          <div id="kb-mode-tabs">
+            <button class="kb-tab active" data-kb-mode="shortcuts">단축키</button>
+            <button class="kb-tab" data-kb-mode="qwerty">QWERTY</button>
+          </div>
+          <div id="kb-scale-box">
+            <label for="kb-scale-slider">크기</label>
+            <input type="range" id="kb-scale-slider" min="0.6" max="1.3" step="0.05" value="1.0">
+          </div>
+          <div id="kb-opacity-box">
+            <label for="kb-opacity-slider">투명도</label>
+            <input type="range" id="kb-opacity-slider" min="0.25" max="1.0" step="0.05" value="0.95">
+          </div>
+          <button id="close-kb-btn" class="close-btn" title="키보드 닫기">✖</button>
+        </div>
+
+        <div id="kb-body">
+          <!-- Native Text Input Bar -->
+          <div class="text-input-row">
+            <input type="text" id="pc-text-input" placeholder="여기를 터치해 글자 입력 후 전송..." autocomplete="off">
+            <button id="btn-send-text">전송</button>
+          </div>
+
+          <!-- ===== Shortcut Layout (default) ===== -->
+          <div id="kb-layout-shortcuts">
+            <!-- Special Function Keys Row -->
+            <div class="kb-row">
+              <button class="key-btn" data-key="esc">Esc</button>
+              <button class="key-btn" data-key="tab">Tab</button>
+              <button class="key-btn" data-key="win">Win</button>
+              <button class="key-btn" data-key="alt">Alt</button>
+              <button class="key-btn" data-key="ctrl">Ctrl</button>
+              <button class="key-btn" data-key="shift">Shift</button>
+              <button class="key-btn" data-key="del">Del</button>
+            </div>
+
+            <!-- Navigation & Action Row -->
+            <div class="kb-row">
+              <button class="key-btn arrow-btn" data-key="left">◀</button>
+              <button class="key-btn arrow-btn" data-key="up">▲</button>
+              <button class="key-btn arrow-btn" data-key="down">▼</button>
+              <button class="key-btn arrow-btn" data-key="right">▶</button>
+              <button class="key-btn wide-btn" data-key="enter">Enter</button>
+              <button class="key-btn" data-key="backspace">Bksp</button>
+            </div>
+
+            <!-- Shortcuts & Media Row -->
+            <div class="kb-row" id="custom-shortcuts-row">
+              <button class="key-btn shortcut-btn" data-hotkey="ctrl+c">Ctrl+C</button>
+              <button class="key-btn shortcut-btn" data-hotkey="ctrl+v">Ctrl+V</button>
+              <button class="key-btn shortcut-btn" data-hotkey="ctrl+z">Ctrl+Z</button>
+              <button class="key-btn shortcut-btn" data-hotkey="alt+tab">Alt+Tab</button>
+              <button class="key-btn shortcut-btn" data-hotkey="win+d">Win+D</button>
+            </div>
+
+            <div class="kb-row">
+              <button class="key-btn media-btn" data-key="volumedown">🔉 볼륨 -</button>
+              <button class="key-btn media-btn" data-key="volumeup">🔊 볼륨 +</button>
+              <button class="key-btn media-btn" data-key="volumemute">🔇 음소거</button>
+              <button class="key-btn shortcut-btn" data-key="space">Space</button>
+            </div>
+          </div>
+
+          <!-- ===== QWERTY Layout (hidden by default) ===== -->
+          <div id="kb-layout-qwerty" class="hidden">
+            <!-- Row 1: Esc + Numbers + Del -->
+            <div class="kb-row">
+              <button class="key-btn sys-esc-btn" data-key="esc">Esc</button>
+              <button class="key-btn qwerty-key" data-qkey="1">1</button>
+              <button class="key-btn qwerty-key" data-qkey="2">2</button>
+              <button class="key-btn qwerty-key" data-qkey="3">3</button>
+              <button class="key-btn qwerty-key" data-qkey="4">4</button>
+              <button class="key-btn qwerty-key" data-qkey="5">5</button>
+              <button class="key-btn qwerty-key" data-qkey="6">6</button>
+              <button class="key-btn qwerty-key" data-qkey="7">7</button>
+              <button class="key-btn qwerty-key" data-qkey="8">8</button>
+              <button class="key-btn qwerty-key" data-qkey="9">9</button>
+              <button class="key-btn qwerty-key" data-qkey="0">0</button>
+              <button class="key-btn sys-del-btn" data-key="del">Del</button>
+            </div>
+            <!-- Row 2: Tab + QWERTYUIOP + Backspace -->
+            <div class="kb-row">
+              <button class="key-btn sys-tab-btn" data-key="tab">Tab</button>
+              <button class="key-btn qwerty-key" data-qkey="q">q</button>
+              <button class="key-btn qwerty-key" data-qkey="w">w</button>
+              <button class="key-btn qwerty-key" data-qkey="e">e</button>
+              <button class="key-btn qwerty-key" data-qkey="r">r</button>
+              <button class="key-btn qwerty-key" data-qkey="t">t</button>
+              <button class="key-btn qwerty-key" data-qkey="y">y</button>
+              <button class="key-btn qwerty-key" data-qkey="u">u</button>
+              <button class="key-btn qwerty-key" data-qkey="i">i</button>
+              <button class="key-btn qwerty-key" data-qkey="o">o</button>
+              <button class="key-btn qwerty-key" data-qkey="p">p</button>
+              <button class="key-btn qwerty-key sys-bksp-btn" data-key="backspace">⌫</button>
+            </div>
+            <!-- Row 3: Win + ASDFGHJKL + Enter -->
+            <div class="kb-row">
+              <button class="key-btn sys-win-btn" data-key="win">Win</button>
+              <button class="key-btn qwerty-key" data-qkey="a">a</button>
+              <button class="key-btn qwerty-key" data-qkey="s">s</button>
+              <button class="key-btn qwerty-key" data-qkey="d">d</button>
+              <button class="key-btn qwerty-key" data-qkey="f">f</button>
+              <button class="key-btn qwerty-key" data-qkey="g">g</button>
+              <button class="key-btn qwerty-key" data-qkey="h">h</button>
+              <button class="key-btn qwerty-key" data-qkey="j">j</button>
+              <button class="key-btn qwerty-key" data-qkey="k">k</button>
+              <button class="key-btn qwerty-key" data-qkey="l">l</button>
+              <button class="key-btn qwerty-key wide-btn" data-key="enter">Enter</button>
+            </div>
+            <!-- Row 4: Shift + ZXCVBNM + Punctuation + Arrow Up -->
+            <div class="kb-row">
+              <button class="key-btn qwerty-key qwerty-shift-btn" id="qwerty-shift-btn">⇧ Shift</button>
+              <button class="key-btn qwerty-key" data-qkey="z">z</button>
+              <button class="key-btn qwerty-key" data-qkey="x">x</button>
+              <button class="key-btn qwerty-key" data-qkey="c">c</button>
+              <button class="key-btn qwerty-key" data-qkey="v">v</button>
+              <button class="key-btn qwerty-key" data-qkey="b">b</button>
+              <button class="key-btn qwerty-key" data-qkey="n">n</button>
+              <button class="key-btn qwerty-key" data-qkey="m">m</button>
+              <button class="key-btn qwerty-key" data-qkey=",">,</button>
+              <button class="key-btn qwerty-key" data-qkey=".">.</button>
+              <button class="key-btn arrow-btn" data-key="up">▲</button>
+            </div>
+            <!-- Row 5: Ctrl + Win + Alt + Space + Arrow Left, Down, Right -->
+            <div class="kb-row">
+              <button class="key-btn qwerty-key sys-ctrl-btn" data-key="ctrl">Ctrl</button>
+              <button class="key-btn qwerty-key sys-win-btn" data-key="win">Win</button>
+              <button class="key-btn qwerty-key sys-alt-btn" data-key="alt">Alt</button>
+              <button class="key-btn qwerty-key qwerty-space" data-key="space">Space</button>
+              <button class="key-btn arrow-btn" data-key="left">◀</button>
+              <button class="key-btn arrow-btn" data-key="down">▼</button>
+              <button class="key-btn arrow-btn" data-key="right">▶</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ====================================================================
+           Settings Modal
+           ==================================================================== -->
+      <div id="settings-modal" class="hidden">
+        <div class="settings-overlay"></div>
+        <div class="settings-panel">
+          <div class="settings-header">
+            <h3>⚙️ 설정</h3>
+            <button id="close-settings-btn" class="close-btn">✖</button>
+          </div>
+          <div class="settings-body">
+
+            <!-- Orientation Section -->
+            <div class="settings-section">
+              <h4>📐 화면 방향</h4>
+              <div class="settings-row">
+                <label>화면 모드</label>
+                <select id="settings-orientation">
+                  <option value="landscape">가로 모드 (Landscape)</option>
+                  <option value="portrait">세로 모드 (Portrait)</option>
+                </select>
+              </div>
+            </div>
+
+            <!-- Screen Streaming Quality Section -->
+            <div class="settings-section">
+              <h4>📺 화면 스트리밍 화질</h4>
+              <div class="settings-row">
+                <label for="settings-screen-quality">화질 모드</label>
+                <select id="settings-screen-quality">
+                  <option value="ultra">💎 초고화질 (PC 원본 1:1 QHD / 품질 85%)</option>
+                  <option value="high" selected>✨ 고화질 (1080p FHD / 품질 78%) - 권장</option>
+                  <option value="normal">⚡ 일반 (720p HD / 품질 60%) - 데이터 절약</option>
+                </select>
+              </div>
+              <p class="settings-hint">💡 텍스트가 흐릿하거나 작은 글씨를 읽어야 할 때는 '고화질' 또는 '초고화질'을 선택하세요. Wi-Fi 환경에서는 초고화질을 강력히 추천합니다.</p>
+            </div>
+
+            <!-- Save PC / Trusted Device Management Section -->
+            <div class="settings-section">
+              <h4>💾 컴퓨터 등록 및 원클릭 연결</h4>
+              <p class="settings-hint">현재 연결된 컴퓨터를 신뢰하는 기기로 등록하면, 다음부터 비밀번호나 QR 코드 없이 원클릭으로 바로 접속할 수 있습니다.</p>
+              <button type="button" id="btn-settings-save-pc" class="btn-settings-action" style="margin-top: 8px;">
+                💾 현재 연결된 PC 등록 요청
+              </button>
+            </div>
+
+            <!-- Keyboard Layout & Opacity Section -->
+            <div class="settings-section">
+              <h4>⌨️ 키보드 구성 & 투명도</h4>
+              <div class="settings-row">
+                <label>기본 키보드 레이아웃</label>
+                <select id="settings-kb-layout">
+                  <option value="shortcuts">단축키 모드</option>
+                  <option value="qwerty">QWERTY 키보드</option>
+                </select>
+              </div>
+              <div class="settings-row">
+                <label for="settings-kb-opacity">키보드 투명도</label>
+                <div class="slider-row">
+                  <input type="range" id="settings-kb-opacity" min="0.25" max="1.0" step="0.05" value="0.95">
+                  <span id="kb-opacity-val" class="slider-val">95%</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Trackpad Sensitivity Section -->
+            <div class="settings-section">
+              <h4>🎛️ 트랙패드 감도</h4>
+              <div class="settings-row">
+                <label for="settings-sensitivity">이동 속도</label>
+                <div class="slider-row">
+                  <input type="range" id="settings-sensitivity" min="0.4" max="2.5" step="0.1" value="1.0">
+                  <span id="sensitivity-value" class="slider-val">1.0x</span>
+                </div>
+              </div>
+              <p class="settings-hint">💡 트랙패드 모드에서 손가락을 밀었을 때 마우스 커서의 반응 속도를 조절합니다.</p>
+            </div>
+
+            <!-- Custom Shortcuts Section -->
+            <div class="settings-section">
+              <h4>🎹 단축키 편집</h4>
+              <p class="settings-hint">단축키를 추가/수정/삭제할 수 있습니다. 형식: ctrl+c, alt+tab, win+d 등</p>
+              <div id="shortcut-editor-list"></div>
+              <button id="btn-add-shortcut" class="btn-settings-action">+ 단축키 추가</button>
+            </div>
+
+            <!-- App Version & Update Section -->
+            <div class="settings-section">
+              <h4>📱 앱 버전 및 간편 업데이트</h4>
+              <div class="settings-row">
+                <span id="app-current-version">버전: v2.2.0</span>
+                <span id="app-update-badge" class="badge">최신</span>
+              </div>
+              <button id="btn-check-update" class="btn-settings-action btn-update-action">
+                🔄 최신 버전으로 업데이트 (캐시 삭제)
+              </button>
+              <p class="settings-hint">💡 스마트폰 앱을 삭제 후 다시 설치할 필요 없이, 이 버튼을 누르면 서버의 최신 기능을 즉시 새로고침하여 적용합니다.</p>
+            </div>
+
+            <!-- Save Button -->
+            <button id="btn-save-settings" class="btn-settings-save">💾 설정 저장</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Update Toast Notification Banner -->
+      <div id="update-toast" class="update-toast hidden">
+        <span class="update-toast-text">🚀 최신 업데이트가 있습니다!</span>
+        <button id="btn-toast-update" class="btn-toast-update">지금 업데이트</button>
+      </div>
+
+      <!-- Backdrop for closing menu on outside tap -->
+      <div id="radial-backdrop" class="hidden"></div>
+
+      <!-- Radial Orbital Floating Action Menu -->
+      <div id="radial-menu-container">
+        <!-- Orbital Sub Buttons -->
+        <div id="radial-items" class="collapsed">
+          <button id="radial-btn-drag" class="radial-item" title="드래그 ON/OFF 토글">
+            <span class="radial-icon">✋</span>
+            <span class="radial-label">드래그</span>
+          </button>
+
+          <button id="radial-btn-scroll" class="radial-item" title="스크롤 휠 토글">
+            <span class="radial-icon">📜</span>
+            <span class="radial-label">스크롤휠</span>
+          </button>
+
+          <button id="radial-btn-kb" class="radial-item" title="가상 키보드 열기">
+            <span class="radial-icon">⌨️</span>
+            <span class="radial-label">키보드</span>
+          </button>
+
+          <button id="radial-btn-save-pc" class="radial-item radial-save-item" title="이 컴퓨터를 '저장된 기기'로 등록">
+            <span class="radial-icon">💾</span>
+            <span class="radial-label">PC저장</span>
+          </button>
+
+          <button id="radial-btn-settings" class="radial-item" title="설정">
+            <span class="radial-icon">⚙️</span>
+            <span class="radial-label">설정</span>
+          </button>
+        </div>
+
+        <!-- Main Central Menu Trigger FAB -->
+        <button id="main-menu-fab" class="fab-btn" title="메뉴 열기">
+          <span id="fab-icon" class="fab-icon">☰</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Save PC / Verification Modal Overlay -->
+    <div id="save-pc-modal" class="hidden">
+      <div class="save-pc-dialog">
+        <div class="save-pc-icon">🖥️ ⏳</div>
+        <h3>컴퓨터에서 본인 확인 진행 중</h3>
+        <p class="save-pc-desc">
+          잠시 화면 공유를 일시 중지했습니다.<br>
+          <strong>PC 모니터 화면에 나타난 확인 창</strong>에서<br>
+          <span style="color: var(--accent-cyan); font-weight: 700;">[예]</span> 버튼을 눌러 승인해 주세요.
+        </p>
+        <div class="save-pc-spinner"></div>
+        <button type="button" id="btn-cancel-save-pc" class="btn-cancel-modal">취소</button>
+      </div>
+    </div>
+
+    <!-- App Install Modal (Shown on Web visits) -->
+    <div id="app-install-modal" class="hidden">
+      <div class="app-install-dialog">
+        <div class="install-header">
+          <div class="install-app-icon">📱</div>
+          <div class="install-title-box">
+            <h3>PhonePC Remote 앱 설치</h3>
+            <p>전용 앱으로 더 빠르고 편리하게 이용하세요</p>
+          </div>
+        </div>
+
+        <div class="install-features">
+          <div class="install-feat-item">
+            <span class="feat-icon">⚡</span>
+            <span>초저지연 화면 미러링 & 고음질 오디오 스트리밍</span>
+          </div>
+          <div class="install-feat-item">
+            <span class="feat-icon">📷</span>
+            <span>QR 코드 카메라 스캔 & 저장된 PC 원클릭 연결</span>
+          </div>
+          <div class="install-feat-item">
+            <span class="feat-icon">🎮</span>
+            <span>화면 회전 고정 및 전체화면 몰입형 터치패드</span>
+          </div>
+        </div>
+
+        <div class="install-actions">
+          <button type="button" id="btn-accept-install" class="btn-install-accept">
+            📲 전용 앱 설치하기
+          </button>
+          <button type="button" id="btn-decline-install" class="btn-install-decline">
+            🌐 웹으로 계속하기
+          </button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <script src="app.js?v=2.2.1"></script>
+</body>
+</html>
