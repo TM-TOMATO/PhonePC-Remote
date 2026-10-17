@@ -4,7 +4,7 @@
 #define MyAppName "PhonePC Remote"
 #define MyAppVersion "2.2.0"
 #define MyAppPublisher "PhonePC Remote"
-#define MyAppURL "https://github.com/phonepc-remote"
+#define MyAppURL "https://github.com/TM-TOMATO/PhonePC-Remote"
 #define MyAppExeName "PhonePC_Remote.exe"
 
 [Setup]
@@ -18,13 +18,16 @@ AppUpdatesURL={#MyAppURL}
 DefaultDirName={autopf}\{#MyAppName}
 DisableProgramGroupPage=yes
 DefaultGroupName={#MyAppName}
-OutputDir=dist
+OutputDir=.
 OutputBaseFilename=PhonePC_Remote_v2.2.0_Setup
+SetupIconFile=app.ico
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
 ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=lowest
+CloseApplications=yes
+RestartApplications=no
 UninstallDisplayIcon={app}\{#MyAppExeName}
 
 [Languages]
