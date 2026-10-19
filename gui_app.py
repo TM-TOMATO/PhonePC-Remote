@@ -513,43 +513,62 @@ def run_tunnel_worker():
         print("[Tunnel] cloudflared.exe not available at", CLOUDFLARED_PATH)
         return
 
-    cleanup_cloudflared()
+    while True:
+        cleanup_cloudflared()
 
-    unique_id = f"{os.getpid()}_{int(time.time())}"
-    log_path = BASE_DIR / f"tunnel_{unique_id}.log"
+        unique_id = f"{os.getpid()}_{int(time.time())}"
+        log_path = BASE_DIR / f"tunnel_{unique_id}.log"
 
-    cmd = [str(CLOUDFLARED_PATH), "tunnel", "--url", f"http://127.0.0.1:{PORT}", "--logfile", str(log_path)]
-    startupinfo = None
-    if sys.platform == "win32":
-        startupinfo = subprocess.STARTUPINFO()
-        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-        startupinfo.wShowWindow = 0  # SW_HIDE
+        cmd = [str(CLOUDFLARED_PATH), "tunnel", "--url", f"http://127.0.0.1:{PORT}", "--logfile", str(log_path)]
+        startupinfo = None
+        if sys.platform == "win32":
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = 0  # SW_HIDE
 
-    try:
-        cloudflared_proc = subprocess.Popen(cmd, startupinfo=startupinfo)
-        print(f"[Tunnel] Started cloudflared PID {cloudflared_proc.pid}, logging to {log_path.name}")
+        acquired = False
+        try:
+            cloudflared_proc = subprocess.Popen(cmd, startupinfo=startupinfo)
+            print(f"[Tunnel] Started cloudflared PID {cloudflared_proc.pid}, logging to {log_path.name}")
 
-        for _ in range(60):  # up to 30s
-            time.sleep(0.5)
-            if cloudflared_proc.poll() is not None:
-                print(f"[Tunnel] cloudflared exited early code={cloudflared_proc.returncode}")
-                break
+            for _ in range(60):  # up to 30s
+                time.sleep(0.5)
+                if cloudflared_proc.poll() is not None:
+                    print(f"[Tunnel] cloudflared exited early code={cloudflared_proc.returncode}")
+                    break
+                if log_path.exists():
+                    try:
+                        content = log_path.read_text(encoding="utf-8", errors="ignore")
+                        matches = re.findall(r"https://[a-zA-Z0-9-]+\.trycloudflare\.com", content)
+                        if matches:
+                            new_url = matches[-1]
+                            print(f"[Tunnel] Acquired active tunnel URL: {new_url}")
+                            PUBLIC_TUNNEL_URL = new_url
+                            acquired = True
+                            if gui_root and getattr(gui_root, 'current_mode', 'tunnel') == 'tunnel':
+                                CURRENT_CONNECT_URL = f"{PUBLIC_TUNNEL_URL}/?id={SESSION_ID_RAW}&pin={SESSION_PIN}"
+                                gui_root.after(0, on_tunnel_ready)
+                            break
+                    except Exception:
+                        pass
+        except Exception as e:
+            print("[Tunnel] Failed to run cloudflared:", e)
+
+        # Watchdog loop: keep checking health of the tunnel
+        while acquired and cloudflared_proc and cloudflared_proc.poll() is None:
+            time.sleep(6)
             if log_path.exists():
                 try:
-                    content = log_path.read_text(encoding="utf-8", errors="ignore")
-                    matches = re.findall(r"https://[a-zA-Z0-9-]+\.trycloudflare\.com", content)
-                    if matches:
-                        new_url = matches[-1]
-                        print(f"[Tunnel] Acquired active tunnel URL: {new_url}")
-                        PUBLIC_TUNNEL_URL = new_url
-                        if gui_root and getattr(gui_root, 'current_mode', 'tunnel') == 'tunnel':
-                            CURRENT_CONNECT_URL = f"{PUBLIC_TUNNEL_URL}/?id={SESSION_ID_RAW}&pin={SESSION_PIN}"
-                            gui_root.after(0, on_tunnel_ready)
+                    tail = log_path.read_text(encoding="utf-8", errors="ignore")[-4096:]
+                    if "Unauthorized: Tunnel not found" in tail or "Register tunnel error from server side" in tail:
+                        print("[Tunnel] Cloudflare tunnel expired or revoked. Restarting...")
                         break
                 except Exception:
                     pass
-    except Exception as e:
-        print("[Tunnel] Failed to run cloudflared:", e)
+
+        print("[Tunnel] Cloudflare tunnel lost or process ended. Reconnecting in 3 seconds...")
+        cleanup_cloudflared()
+        time.sleep(3)
 
 # -----------------------------------------------------------------------------
 # Desktop Native GUI (Tkinter Modern Dark Theme)
@@ -643,18 +662,29 @@ class PhonePCApp(tk.Tk):
 
         self.btn_mode_tunnel = tk.Button(
             mode_box,
-            text="🌍 인터넷 (LTE/외부 어디서나)",
+            text="🌍 인터넷 (LTE/외부)",
             font=("Malgun Gothic", 9, "bold"),
             bg="#0284c7", fg="#ffffff",
             bd=0, padx=6, pady=5,
             command=self.set_mode_tunnel,
             cursor="hand2"
         )
-        self.btn_mode_tunnel.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 3))
+        self.btn_mode_tunnel.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 2))
+
+        self.btn_tunnel_refresh = tk.Button(
+            mode_box,
+            text="🔄 갱신",
+            font=("Malgun Gothic", 8, "bold"),
+            bg="#0369a1", fg="#ffffff",
+            bd=0, padx=5, pady=5,
+            command=self.refresh_tunnel,
+            cursor="hand2"
+        )
+        self.btn_tunnel_refresh.pack(side=tk.LEFT, padx=(0, 3))
 
         self.btn_mode_wifi = tk.Button(
             mode_box,
-            text="📶 Wi-Fi 로컬 (공유기 내 초고속)",
+            text="📶 Wi-Fi 로컬",
             font=("Malgun Gothic", 9),
             bg="#1e293b", fg="#94a3b8",
             bd=0, padx=6, pady=5,
@@ -719,6 +749,14 @@ class PhonePCApp(tk.Tk):
                 fg="#facc15"
             )
         self.update_qr_image()
+
+    def refresh_tunnel(self):
+        self.set_mode_tunnel()
+        self.conn_type_lbl.configure(
+            text="🌍 인터넷 터널 새 주소 발급 중 (잠시만 기다려주세요)...",
+            fg="#facc15"
+        )
+        cleanup_cloudflared()
 
     def set_mode_wifi(self):
         global CURRENT_CONNECT_URL
