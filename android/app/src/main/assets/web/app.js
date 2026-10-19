@@ -507,6 +507,7 @@
       connText.textContent = '연결됨';
       startPingInterval();
       sendAuthPayload();
+      checkAppVersion();
     };
 
     ws.onclose = () => {
@@ -2436,52 +2437,156 @@
   bindRadialItemClick(radialBtnSettings, () => openSettings());
 
   // --------------------------------------------------------------------------
-  // App Version & 1-Tap Update System
+  // App Version & 1-Tap Update System (Android APK & Web PWA)
   // --------------------------------------------------------------------------
+  let latestApkUrl = 'https://github.com/TM-TOMATO/PhonePC-Remote/releases/latest/download/PhonePC_Remote_v2.2.0.apk';
+
+  function compareVersions(v1, v2) {
+    if (!v1 || !v2) return 0;
+    const p1 = String(v1).replace(/^v/, '').split('.').map((x) => parseInt(x, 10) || 0);
+    const p2 = String(v2).replace(/^v/, '').split('.').map((x) => parseInt(x, 10) || 0);
+    const len = Math.max(p1.length, p2.length);
+    for (let i = 0; i < len; i++) {
+      const a = p1[i] || 0;
+      const b = p2[i] || 0;
+      if (a > b) return 1;
+      if (a < b) return -1;
+    }
+    return 0;
+  }
+
   async function checkAppVersion() {
     try {
-      const res = await fetch('/api/version?t=' + Date.now(), { cache: 'no-store' });
-      if (!res.ok) return;
-      const data = await res.json();
+      let serverVersion = APP_VERSION;
+      let serverBuild = 0;
+      let foundUrl = '';
 
-      const serverVersion = data.version || APP_VERSION;
-      const serverBuild = data.build_time || 0;
+      // 1. Check PC Host if host is known
+      const targetHost = serverHost || (location.host && !location.host.includes('localhost') ? location.host : '');
+      if (targetHost) {
+        const proto = (serverProtocol === 'https:' || location.protocol === 'https:') ? 'https:' : 'http:';
+        try {
+          const res = await fetch(`${proto}//${targetHost}/api/version?t=${Date.now()}`, { cache: 'no-store' });
+          if (res.ok) {
+            const data = await res.json();
+            serverVersion = data.version || serverVersion;
+            serverBuild = data.build_time || 0;
+            foundUrl = `${proto}//${targetHost}/download/apk`;
+          }
+        } catch (e) {}
+      }
+
+      // 2. Check Saved PCs if not found yet
+      if (!foundUrl) {
+        const savedList = getSavedPcs();
+        for (const sp of savedList) {
+          if (sp.host) {
+            const spProto = (sp.host.includes('trycloudflare.com') || sp.host.includes('https')) ? 'https:' : 'http:';
+            try {
+              const res = await fetch(`${spProto}//${sp.host}/api/version?t=${Date.now()}`, { cache: 'no-store' });
+              if (res.ok) {
+                const data = await res.json();
+                serverVersion = data.version || serverVersion;
+                serverBuild = data.build_time || 0;
+                foundUrl = `${spProto}//${sp.host}/download/apk`;
+                break;
+              }
+            } catch (e) {}
+          }
+        }
+      }
+
+      // 3. Check GitHub Releases API for latest APK release
+      try {
+        const ghRes = await fetch('https://api.github.com/repos/TM-TOMATO/PhonePC-Remote/releases/latest', { cache: 'no-store' });
+        if (ghRes.ok) {
+          const ghData = await ghRes.json();
+          const ghTag = (ghData.tag_name || '').replace(/^v/, '');
+          if (ghTag && compareVersions(ghTag, serverVersion) > 0) {
+            serverVersion = ghTag;
+          }
+          const apkAsset = (ghData.assets || []).find((a) => a.name && a.name.endsWith('.apk'));
+          if (apkAsset && apkAsset.browser_download_url) {
+            if (!foundUrl) foundUrl = apkAsset.browser_download_url;
+          }
+        }
+      } catch (e) {}
+
+      if (foundUrl) {
+        latestApkUrl = foundUrl;
+      }
+
+      // Display current version
+      const isNativeApp = !!(window.AndroidBridge && typeof window.AndroidBridge.downloadAndInstallApk === 'function');
+      const currentVer = isNativeApp && window.AndroidBridge.getAppVersionName ? window.AndroidBridge.getAppVersionName() : APP_VERSION;
 
       if (authAppVersion) {
-        authAppVersion.textContent = `PhonePC Remote v${serverVersion}`;
+        authAppVersion.textContent = `PhonePC Remote v${currentVer}${isNativeApp ? ' (Android App)' : ' (Web)'}`;
       }
-
       if (appCurrentVersion) {
-        appCurrentVersion.textContent = `버전: v${serverVersion}`;
+        appCurrentVersion.textContent = `현재 버전: v${currentVer}${isNativeApp ? ' (Android)' : ''}`;
       }
 
+      // Check if update is needed
+      const isNewerVer = compareVersions(serverVersion, currentVer) > 0;
       const localBuild = parseInt(localStorage.getItem('phonepc_app_build') || '0', 10);
+      const isNewerBuild = localBuild > 0 && serverBuild > localBuild;
 
-      if (localBuild > 0 && serverBuild > localBuild) {
+      if (isNewerVer || isNewerBuild) {
         if (appUpdateBadge) {
-          appUpdateBadge.textContent = '새 버전 있음!';
+          appUpdateBadge.textContent = `v${serverVersion} 업데이트 있음!`;
           appUpdateBadge.style.background = '#0ea5e9';
         }
         if (btnAuthUpdate) {
-          btnAuthUpdate.textContent = '⚡ 새 버전 업데이트!';
+          btnAuthUpdate.textContent = `⚡ v${serverVersion} 앱 자동 업데이트!`;
           btnAuthUpdate.style.borderColor = 'var(--accent-cyan)';
           btnAuthUpdate.style.background = 'rgba(6, 182, 212, 0.28)';
           btnAuthUpdate.style.color = '#ffffff';
         }
-        if (updateToast) updateToast.classList.remove('hidden');
+        if (updateToast) {
+          const toastText = updateToast.querySelector('.update-toast-text');
+          if (toastText) toastText.textContent = `⚡ 최신 버전(v${serverVersion})이 있습니다!`;
+          updateToast.classList.remove('hidden');
+        }
       } else {
-        localStorage.setItem('phonepc_app_build', String(serverBuild));
+        if (serverBuild > 0) {
+          localStorage.setItem('phonepc_app_build', String(serverBuild));
+        }
       }
     } catch (e) {}
   }
 
   async function performAppUpdate() {
     vibrate([40, 60, 40]);
-    if (btnAuthUpdate) btnAuthUpdate.textContent = '⏳ 업데이트 중...';
-    if (btnCheckUpdate) btnCheckUpdate.textContent = '⏳ 업데이트 진행 중...';
-    if (btnToastUpdate) btnToastUpdate.textContent = '⏳ 업데이트 중...';
+    const isNativeApp = !!(window.AndroidBridge && typeof window.AndroidBridge.downloadAndInstallApk === 'function');
 
-    // 1. Clear CacheStorage
+    if (btnAuthUpdate) btnAuthUpdate.textContent = '⏳ 업데이트 진행 중...';
+    if (btnCheckUpdate) btnCheckUpdate.textContent = '⏳ 업데이트 진행 중...';
+    if (btnToastUpdate) btnToastUpdate.textContent = '⏳ 다운로드 중...';
+
+    // 1. If running inside native Android App -> Trigger native in-app APK download & system install!
+    if (isNativeApp) {
+      let apkUrl = latestApkUrl;
+      if (!apkUrl) {
+        const targetHost = serverHost || location.host;
+        if (targetHost && !targetHost.includes('localhost') && !targetHost.includes('127.0.0.1')) {
+          const proto = (serverProtocol === 'https:' || location.protocol === 'https:') ? 'https:' : 'http:';
+          apkUrl = `${proto}//${targetHost}/download/apk`;
+        } else {
+          apkUrl = 'https://github.com/TM-TOMATO/PhonePC-Remote/releases/latest/download/PhonePC_Remote_v2.2.0.apk';
+        }
+      }
+      console.log('[AppUpdate] Native Android APK download trigger:', apkUrl);
+      window.AndroidBridge.downloadAndInstallApk(apkUrl);
+      setTimeout(() => {
+        if (btnAuthUpdate) btnAuthUpdate.textContent = '📥 다운로드 완료 대기...';
+        if (btnCheckUpdate) btnCheckUpdate.textContent = '📥 다운로드 완료 대기...';
+      }, 1500);
+      return;
+    }
+
+    // 2. If running in web browser / PWA:
+    // Clear CacheStorage
     if ('caches' in window) {
       try {
         const cacheNames = await caches.keys();
@@ -2489,7 +2594,7 @@
       } catch (e) {}
     }
 
-    // 2. Unregister Service Workers
+    // Unregister Service Workers
     if ('serviceWorker' in navigator) {
       try {
         const registrations = await navigator.serviceWorker.getRegistrations();
@@ -2499,7 +2604,7 @@
       } catch (e) {}
     }
 
-    // 3. Update build time in localStorage
+    // Update build time in localStorage
     try {
       const res = await fetch('/api/version?t=' + Date.now(), { cache: 'no-store' });
       const data = await res.json();
@@ -2508,7 +2613,7 @@
       }
     } catch (e) {}
 
-    // 4. Force hard reload with unique timestamp
+    // Force hard reload with unique timestamp
     setTimeout(() => {
       const bustUrl = window.location.origin + window.location.pathname + '?update=' + Date.now();
       window.location.replace(bustUrl);
@@ -2525,6 +2630,21 @@
 
   if (btnToastUpdate) {
     btnToastUpdate.addEventListener('click', performAppUpdate);
+  }
+
+  const btnAuthApk = document.getElementById('btn-auth-apk');
+  if (btnAuthApk) {
+    btnAuthApk.addEventListener('click', (e) => {
+      const isNativeApp = !!(window.AndroidBridge && typeof window.AndroidBridge.downloadAndInstallApk === 'function');
+      if (isNativeApp) {
+        e.preventDefault();
+        vibrate(20);
+        performAppUpdate();
+      } else if (location.protocol === 'file:') {
+        e.preventDefault();
+        window.open('https://github.com/TM-TOMATO/PhonePC-Remote/releases/latest/download/PhonePC_Remote_v2.2.0.apk', '_blank');
+      }
+    });
   }
 
   // --------------------------------------------------------------------------

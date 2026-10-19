@@ -15,6 +15,7 @@ import android.view.View;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.view.WindowManager;
+import android.webkit.DownloadListener;
 import android.webkit.JavascriptInterface;
 import android.webkit.PermissionRequest;
 import android.webkit.ValueCallback;
@@ -24,15 +25,23 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Toast;
 
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+
 public class MainActivity extends Activity {
 
     private static final int PERMISSION_REQUEST_CODE = 1001;
     private static final int FILE_CHOOSER_REQUEST_CODE = 1002;
+    private static final int UNKNOWN_SOURCES_REQUEST_CODE = 1003;
 
     private WebView mWebView;
     private ValueCallback<Uri[]> mFilePathCallback;
     private Vibrator mVibrator;
     private PermissionRequest mPendingPermissionRequest;
+    private File mPendingInstallFile;
 
     @SuppressLint({"SetJavaScriptEnabled", "JavascriptInterface"})
     @Override
@@ -103,9 +112,30 @@ public class MainActivity extends Activity {
         // Add native JavaScript bridge
         mWebView.addJavascriptInterface(new WebAppInterface(), "AndroidBridge");
 
+        // Download listener for handling direct APK links or browser downloads
+        mWebView.setDownloadListener(new DownloadListener() {
+            @Override
+            public void onDownloadStart(String url, String userAgent, String contentDisposition, String mimetype, long contentLength) {
+                if (url.endsWith(".apk") || (mimetype != null && mimetype.contains("android.package-archive")) || url.contains("/download/apk")) {
+                    downloadAndInstallApk(url);
+                } else {
+                    try {
+                        Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+                        startActivity(i);
+                    } catch (Exception e) {
+                        Toast.makeText(MainActivity.this, "다운로드 링크 열기 실패", Toast.LENGTH_SHORT).show();
+                    }
+                }
+            }
+        });
+
         mWebView.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, String url) {
+                if (url.endsWith(".apk") || url.contains("/download/apk")) {
+                    downloadAndInstallApk(url);
+                    return true;
+                }
                 if (url.startsWith("http://") || url.startsWith("https://") || url.startsWith("file://")) {
                     view.loadUrl(url);
                     return true;
@@ -165,6 +195,11 @@ public class MainActivity extends Activity {
             if (mFilePathCallback == null) return;
             mFilePathCallback.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(resultCode, data));
             mFilePathCallback = null;
+        } else if (requestCode == UNKNOWN_SOURCES_REQUEST_CODE) {
+            if (mPendingInstallFile != null && mPendingInstallFile.exists()) {
+                promptInstallApk(mPendingInstallFile);
+                mPendingInstallFile = null;
+            }
         }
     }
 
@@ -201,6 +236,107 @@ public class MainActivity extends Activity {
             mWebView.goBack();
         } else {
             super.onBackPressed();
+        }
+    }
+
+    /**
+     * Download an APK from URL and trigger system installation
+     */
+    public void downloadAndInstallApk(final String downloadUrl) {
+        if (downloadUrl == null || downloadUrl.trim().isEmpty()) {
+            Toast.makeText(this, "다운로드할 URL이 올바르지 않습니다.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        runOnUiThread(() -> Toast.makeText(this, "📥 최신 앱 다운로드 중... 잠시만 기다려주세요.", Toast.LENGTH_LONG).show());
+
+        new Thread(() -> {
+            InputStream in = null;
+            FileOutputStream out = null;
+            HttpURLConnection conn = null;
+            try {
+                URL url = new URL(downloadUrl);
+                conn = (HttpURLConnection) url.openConnection();
+                conn.setConnectTimeout(15000);
+                conn.setReadTimeout(60000);
+                conn.setInstanceFollowRedirects(true);
+                conn.setRequestProperty("User-Agent", "PhonePC-Remote-Android");
+                conn.connect();
+
+                int status = conn.getResponseCode();
+                // Handle HTTP redirects (GitHub Releases redirect 302 to CDN)
+                int redirects = 0;
+                while ((status == HttpURLConnection.HTTP_MOVED_TEMP
+                        || status == HttpURLConnection.HTTP_MOVED_PERM
+                        || status == 307
+                        || status == 308) && redirects < 5) {
+                    String redirectUrl = conn.getHeaderField("Location");
+                    conn.disconnect();
+                    url = new URL(redirectUrl);
+                    conn = (HttpURLConnection) url.openConnection();
+                    conn.setConnectTimeout(15000);
+                    conn.setReadTimeout(60000);
+                    conn.setRequestProperty("User-Agent", "PhonePC-Remote-Android");
+                    conn.connect();
+                    status = conn.getResponseCode();
+                    redirects++;
+                }
+
+                if (status != HttpURLConnection.HTTP_OK) {
+                    throw new Exception("HTTP 응답 코드: " + status);
+                }
+
+                File cacheDir = getCacheDir();
+                File apkFile = new File(cacheDir, "update.apk");
+                if (apkFile.exists()) {
+                    apkFile.delete();
+                }
+
+                in = conn.getInputStream();
+                out = new FileOutputStream(apkFile);
+                byte[] buffer = new byte[8192];
+                int len;
+                while ((len = in.read(buffer)) != -1) {
+                    out.write(buffer, 0, len);
+                }
+                out.flush();
+
+                runOnUiThread(() -> {
+                    Toast.makeText(MainActivity.this, "✅ 다운로드 완료! 설치 화면을 엽니다.", Toast.LENGTH_SHORT).show();
+                    promptInstallApk(apkFile);
+                });
+
+            } catch (final Exception e) {
+                runOnUiThread(() -> Toast.makeText(MainActivity.this, "다운로드 실패: " + e.getMessage(), Toast.LENGTH_LONG).show());
+            } finally {
+                try { if (in != null) in.close(); } catch (Exception ignored) {}
+                try { if (out != null) out.close(); } catch (Exception ignored) {}
+                if (conn != null) conn.disconnect();
+            }
+        }).start();
+    }
+
+    private void promptInstallApk(File apkFile) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                if (!getPackageManager().canRequestPackageInstalls()) {
+                    mPendingInstallFile = apkFile;
+                    Intent settingsIntent = new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES);
+                    settingsIntent.setData(Uri.parse("package:" + getPackageName()));
+                    startActivityForResult(settingsIntent, UNKNOWN_SOURCES_REQUEST_CODE);
+                    Toast.makeText(this, "업데이트 설치를 위해 '이 출처의 앱 허용'을 활성화해주세요.", Toast.LENGTH_LONG).show();
+                    return;
+                }
+            }
+
+            Uri apkUri = Uri.parse("content://com.phonepc.remote.fileprovider/" + apkFile.getName());
+            Intent installIntent = new Intent(Intent.ACTION_VIEW);
+            installIntent.setDataAndType(apkUri, "application/vnd.android.package-archive");
+            installIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            installIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(installIntent);
+        } catch (Exception e) {
+            Toast.makeText(this, "설치 화면 호출 실패: " + e.getMessage(), Toast.LENGTH_LONG).show();
         }
     }
 
@@ -282,6 +418,34 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void showToast(String message) {
             runOnUiThread(() -> Toast.makeText(MainActivity.this, message, Toast.LENGTH_SHORT).show());
+        }
+
+        @JavascriptInterface
+        public boolean isNativeApp() {
+            return true;
+        }
+
+        @JavascriptInterface
+        public String getAppVersionName() {
+            try {
+                return getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+            } catch (Exception e) {
+                return "2.2.0";
+            }
+        }
+
+        @JavascriptInterface
+        public int getAppVersionCode() {
+            try {
+                return getPackageManager().getPackageInfo(getPackageName(), 0).versionCode;
+            } catch (Exception e) {
+                return 220;
+            }
+        }
+
+        @JavascriptInterface
+        public void downloadAndInstallApk(String url) {
+            MainActivity.this.downloadAndInstallApk(url);
         }
     }
 
