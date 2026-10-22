@@ -16,6 +16,8 @@ import subprocess
 import sys
 import threading
 import time
+import tempfile
+import urllib.request
 import uuid
 import tkinter as tk
 from tkinter import ttk, messagebox
@@ -725,11 +727,16 @@ class PhonePCApp(tk.Tk):
         new_pin_btn = tk.Button(btn_box, text="🔄 새 비밀번호", font=("Malgun Gothic", 9), bg="#1e293b", fg="#e2e8f0", bd=0, padx=8, pady=7, command=self.regen_pin, cursor="hand2")
         new_pin_btn.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 4))
 
-        update_btn = tk.Button(btn_box, text=f"⚡ 버전 v{APP_VERSION} 확인", font=("Malgun Gothic", 9, "bold"), bg="#0284c7", fg="#ffffff", bd=0, padx=8, pady=7, command=self.check_update, cursor="hand2")
-        update_btn.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
+        self.update_btn = tk.Button(btn_box, text=f"⚡ 버전 v{APP_VERSION} 확인", font=("Malgun Gothic", 9, "bold"), bg="#0284c7", fg="#ffffff", bd=0, padx=8, pady=7, command=self.check_update, cursor="hand2")
+        self.update_btn.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
 
         exit_btn = tk.Button(btn_box, text="❌ 종료", font=("Malgun Gothic", 9), bg="#ef4444", fg="#ffffff", bd=0, padx=8, pady=7, command=self.on_close, cursor="hand2")
         exit_btn.pack(side=tk.RIGHT, expand=True, fill=tk.X, padx=(4, 0))
+
+        # Background update check state
+        self.latest_release_info = None
+        self.is_downloading_update = False
+        threading.Thread(target=self._background_check_update, daemon=True).start()
 
     def set_mode_tunnel(self):
         global CURRENT_CONNECT_URL
@@ -819,16 +826,162 @@ class PhonePCApp(tk.Tk):
         self.update_qr_image()
         messagebox.showinfo("비밀번호 갱신", f"새 비밀번호 [{SESSION_PIN}] 가 설정되었습니다.\n(참고: '저장된 컴퓨터'로 등록된 스마트폰은 비밀번호 변경과 무관하게 즉시 연결됩니다.)")
 
+    def _background_check_update(self):
+        time.sleep(3)
+        try:
+            req = urllib.request.Request(
+                "https://api.github.com/repos/TM-TOMATO/PhonePC-Remote/releases/latest",
+                headers={"User-Agent": "PhonePC-Remote-PC"}
+            )
+            with urllib.request.urlopen(req, timeout=8) as res:
+                data = json.loads(res.read().decode("utf-8"))
+                remote_tag = data.get("tag_name", "").lstrip("v")
+                assets = data.get("assets", [])
+                setup_url = ""
+                for a in assets:
+                    if a.get("name", "").endswith("_Setup.exe"):
+                        setup_url = a.get("browser_download_url")
+                        break
+                if not setup_url:
+                    for a in assets:
+                        if a.get("name", "").endswith(".exe"):
+                            setup_url = a.get("browser_download_url")
+                            break
+                if remote_tag and self._is_newer_version(remote_tag, APP_VERSION):
+                    self.latest_release_info = (remote_tag, setup_url, data.get("body", ""))
+                    self.after(0, self._on_update_detected)
+        except Exception as e:
+            print(f"[Update] Background update check: {e}")
+
+    def _is_newer_version(self, remote_ver, local_ver):
+        try:
+            r_parts = [int(x) for x in re.findall(r'\d+', remote_ver)]
+            l_parts = [int(x) for x in re.findall(r'\d+', local_ver)]
+            for r, l in zip(r_parts, l_parts):
+                if r > l:
+                    return True
+                if r < l:
+                    return False
+            return len(r_parts) > len(l_parts)
+        except Exception:
+            return False
+
+    def _on_update_detected(self):
+        if not self.latest_release_info:
+            return
+        tag, setup_url, _ = self.latest_release_info
+        if hasattr(self, 'update_btn'):
+            self.update_btn.configure(
+                text=f"⚡ v{tag} 업데이트 가능!",
+                bg="#e11d48",
+                activebackground="#be123c"
+            )
+
     def check_update(self):
-        msg = (
-            f"PhonePC Remote v{APP_VERSION}\n\n"
-            f"• PC 호스트: v{APP_VERSION} (최신 빌드 정상 작동 중)\n"
-            f"• 모바일 웹 / 앱: v{APP_VERSION} (동기화 완료)\n\n"
-            f"현재 최신 버전이 실행 중입니다.\n\n"
-            f"💡 업데이트 및 재설치 안내:\n"
-            f"- PC 전체 재설치: Windows 설치 프로그램(/download/setup)\n"
-            f"- 모바일 앱 갱신: 스마트폰 화면의 [🔄 앱 업데이트] 또는 APK 다운로드"
-        )
+        if self.is_downloading_update:
+            messagebox.showinfo("다운로드 진행 중", "현재 최신 버전 설치 프로그램을 다운로드하고 있습니다.\n잠시만 기다려주세요.")
+            return
+
+        if self.latest_release_info:
+            tag, setup_url, notes = self.latest_release_info
+            note_preview = ("\n\n[주요 변경 사항]\n" + notes[:200] + "...") if notes else ""
+            if messagebox.askyesno(
+                "새 버전 업데이트",
+                f"새로운 버전 (v{tag})이 출시되었습니다!{note_preview}\n\n"
+                f"지금 바로 최신 설치 프로그램을 다운로드하여\n"
+                f"자동으로 업데이트를 진행하시겠습니까?"
+            ):
+                self.start_auto_update_download(setup_url, tag)
+            return
+
+        # Direct check
+        self.update_btn.configure(text="⏳ 확인 중...")
+        def _check_direct():
+            try:
+                req = urllib.request.Request(
+                    "https://api.github.com/repos/TM-TOMATO/PhonePC-Remote/releases/latest",
+                    headers={"User-Agent": "PhonePC-Remote-PC"}
+                )
+                with urllib.request.urlopen(req, timeout=6) as res:
+                    data = json.loads(res.read().decode("utf-8"))
+                    remote_tag = data.get("tag_name", "").lstrip("v")
+                    assets = data.get("assets", [])
+                    setup_url = ""
+                    for a in assets:
+                        if a.get("name", "").endswith("_Setup.exe"):
+                            setup_url = a.get("browser_download_url")
+                            break
+                    if not setup_url:
+                        for a in assets:
+                            if a.get("name", "").endswith(".exe"):
+                                setup_url = a.get("browser_download_url")
+                                break
+                    if remote_tag and self._is_newer_version(remote_tag, APP_VERSION):
+                        self.latest_release_info = (remote_tag, setup_url, data.get("body", ""))
+                        self.after(0, self.check_update)
+                    else:
+                        def _show_latest():
+                            self.update_btn.configure(text=f"⚡ 버전 v{APP_VERSION} 확인", bg="#0284c7")
+                            messagebox.showinfo(
+                                "최신 버전",
+                                f"PhonePC Remote v{APP_VERSION}\n\n"
+                                f"현재 최신 버전이 실행 중입니다.\n새로운 업데이트가 없습니다."
+                            )
+                        self.after(0, _show_latest)
+            except Exception as e:
+                def _show_err():
+                    self.update_btn.configure(text=f"⚡ 버전 v{APP_VERSION} 확인", bg="#0284c7")
+                    messagebox.showinfo("업데이트 확인", f"현재 버전: v{APP_VERSION}\n\n(업데이트 서버 연결 확인 실패: {e})")
+                self.after(0, _show_err)
+
+        threading.Thread(target=_check_direct, daemon=True).start()
+
+    def start_auto_update_download(self, setup_url, tag):
+        if not setup_url:
+            setup_url = f"https://github.com/TM-TOMATO/PhonePC-Remote/releases/download/v{tag}/PhonePC_Remote_v{tag}_Setup.exe"
+
+        self.is_downloading_update = True
+        self.update_btn.configure(text="📥 다운로드 중...", bg="#d97706")
+
+        def _do_download():
+            try:
+                temp_dir = Path(tempfile.gettempdir())
+                installer_path = temp_dir / f"PhonePC_Remote_v{tag}_Setup.exe"
+
+                req = urllib.request.Request(setup_url, headers={"User-Agent": "PhonePC-Remote-PC"})
+                with urllib.request.urlopen(req, timeout=60) as res:
+                    total_size = int(res.headers.get("Content-Length", 0))
+                    downloaded = 0
+                    block_size = 1024 * 64
+
+                    with open(installer_path, "wb") as f:
+                        while True:
+                            chunk = res.read(block_size)
+                            if not chunk:
+                                break
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            if total_size > 0:
+                                percent = int(downloaded * 100 / total_size)
+                                self.after(0, lambda p=percent: self.update_btn.configure(text=f"📥 다운로드 중 ({p}%)..."))
+
+                def _launch_installer():
+                    messagebox.showinfo("다운로드 완료", "최신 버전 다운로드가 완료되었습니다.\n업데이트 설치 프로그램을 실행합니다.")
+                    try:
+                        subprocess.Popen([str(installer_path)])
+                    except Exception as ex:
+                        print(f"Failed to launch installer: {ex}")
+                    self.after(600, self.destroy)
+
+                self.after(0, _launch_installer)
+            except Exception as e:
+                def _fail():
+                    self.is_downloading_update = False
+                    self.update_btn.configure(text=f"⚡ v{tag} 업데이트 가능!", bg="#e11d48")
+                    messagebox.showerror("업데이트 다운로드 실패", f"설치 프로그램 다운로드 중 오류가 발생했습니다:\n{e}\n\n웹 브라우저에서 직접 다운로드해 주세요.")
+                self.after(0, _fail)
+
+        threading.Thread(target=_do_download, daemon=True).start()
     def show_device_confirm_popup(self, device_name, future, loop):
         try:
             self.deiconify()
