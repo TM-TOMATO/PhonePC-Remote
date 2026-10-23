@@ -73,6 +73,36 @@ public class MainActivity extends Activity {
         handleIncomingIntent(intent);
     }
 
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (mWebView != null) {
+            mWebView.onResume();
+            mWebView.resumeTimers();
+            mWebView.evaluateJavascript("if (typeof window.handleAppResume === 'function') { window.handleAppResume(); }", null);
+        }
+        if (getRequestedOrientation() == ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE) {
+            hideSystemUI();
+        }
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        if (mWebView != null) {
+            mWebView.onPause();
+        }
+    }
+
+    @Override
+    protected void onDestroy() {
+        if (mWebView != null) {
+            mWebView.destroy();
+            mWebView = null;
+        }
+        super.onDestroy();
+    }
+
     private String resolveInitialUrl(Intent intent) {
         String baseUrl = "file:///android_asset/web/index.html";
         if (intent == null || intent.getData() == null) {

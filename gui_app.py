@@ -297,7 +297,13 @@ async def handle_screen_stream(request):
         while True:
             frame = streamer.get_latest_frame()
             if frame:
-                await response.write(b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+                try:
+                    await asyncio.wait_for(
+                        response.write(b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + frame + b'\r\n'),
+                        timeout=4.0
+                    )
+                except (asyncio.TimeoutError, ConnectionResetError, Exception):
+                    break
             await asyncio.sleep(0.033)  # ~30 FPS
     except Exception:
         pass

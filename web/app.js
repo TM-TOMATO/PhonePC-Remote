@@ -295,9 +295,6 @@
       try { await navigator.wakeLock.request('screen'); } catch (err) {}
     }
   }
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') requestWakeLock();
-  });
   requestWakeLock();
 
   // --------------------------------------------------------------------------
@@ -324,6 +321,128 @@
       }
     } catch (e) {}
   }
+
+  // --------------------------------------------------------------------------
+  // Server Origin & Screen Stream Lifecycle Management
+  // --------------------------------------------------------------------------
+  function getBaseOrigin() {
+    if (serverHost) {
+      return `${serverProtocol || 'http:'}//${serverHost}`;
+    }
+    if (location.protocol === 'file:' || !location.host) {
+      return 'http://127.0.0.1:8080';
+    }
+    return '';
+  }
+
+  let streamRetryTimer = null;
+  let isRestartingStream = false;
+
+  function startScreenStream() {
+    if (!liveScreenImg || !isScreenMirrorOn || !isAuthenticated) return;
+    const baseOrigin = getBaseOrigin();
+    const newSrc = `${baseOrigin}/screen_stream?t=${Date.now()}`;
+    console.log('[Stream] Starting live screen stream:', newSrc);
+    liveScreenImg.src = newSrc;
+  }
+
+  function stopScreenStream() {
+    if (liveScreenImg) {
+      liveScreenImg.src = '';
+    }
+    if (streamRetryTimer) {
+      clearTimeout(streamRetryTimer);
+      streamRetryTimer = null;
+    }
+  }
+
+  function restartScreenStream() {
+    if (!liveScreenImg || !isScreenMirrorOn || !isAuthenticated || isRestartingStream) return;
+    isRestartingStream = true;
+    console.log('[Stream] Restarting screen stream...');
+    stopScreenStream();
+    setTimeout(() => {
+      isRestartingStream = false;
+      if (isScreenMirrorOn && isAuthenticated) {
+        startScreenStream();
+      }
+    }, 120);
+  }
+
+  if (liveScreenImg) {
+    liveScreenImg.onerror = () => {
+      if (!isAuthenticated || !isScreenMirrorOn) return;
+      console.warn('[Stream] liveScreenImg disconnected or errored. Auto-recovering in 800ms...');
+      if (streamRetryTimer) clearTimeout(streamRetryTimer);
+      streamRetryTimer = setTimeout(() => {
+        if (isAuthenticated && isScreenMirrorOn) {
+          restartScreenStream();
+        }
+      }, 800);
+    };
+  }
+
+  // --------------------------------------------------------------------------
+  // Phone Sleep/Wake & Screen Off/On Lifecycle Recovery
+  // --------------------------------------------------------------------------
+  let resumeWatchdogTimer = null;
+  let lastResumeTimestamp = 0;
+
+  function handleAppResume() {
+    const now = Date.now();
+    // Debounce rapid events
+    if (now - lastResumeTimestamp < 350) return;
+    lastResumeTimestamp = now;
+
+    console.log('[Lifecycle] App resumed / Screen turned ON. Restoring connection & screen stream...');
+
+    requestWakeLock();
+
+    if (!isAuthenticated) return;
+
+    lockLandscape();
+
+    // 1. Verify WebSocket health
+    if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+      console.log('[Lifecycle] WebSocket disconnected during sleep. Reconnecting immediately...');
+      connectWebSocket(currentId, currentPin, currentAuthToken);
+    } else if (ws.readyState === WebSocket.OPEN) {
+      console.log('[Lifecycle] WebSocket OPEN. Sending ping to verify responsiveness...');
+      const pingTime = Date.now();
+      lastPingSentTime = pingTime;
+      sendPayload('ping', { time: pingTime });
+      startPingInterval();
+
+      // If no message was received for > 4s, set watchdog: if still no response in 2s, force reconnect
+      if (Date.now() - lastPongReceivedTime > 4000) {
+        if (resumeWatchdogTimer) clearTimeout(resumeWatchdogTimer);
+        resumeWatchdogTimer = setTimeout(() => {
+          if (isAuthenticated && (!ws || ws.readyState !== WebSocket.OPEN || lastPongReceivedTime < pingTime)) {
+            console.warn('[Lifecycle] Resume ping watchdog timed out! Force reconnecting socket...');
+            try { ws.close(); } catch (e) {}
+            connectWebSocket(currentId, currentPin, currentAuthToken);
+          }
+        }, 2000);
+      }
+    }
+
+    // 2. Always refresh screen stream when screen is turned back ON!
+    if (isScreenMirrorOn) {
+      restartScreenStream();
+    }
+  }
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      handleAppResume();
+    } else {
+      console.log('[Lifecycle] App visibility changed to hidden (Screen turned OFF or minimized).');
+    }
+  });
+
+  window.addEventListener('pageshow', () => handleAppResume());
+  window.addEventListener('focus', () => handleAppResume());
+  window.handleAppResume = handleAppResume;
 
   // --------------------------------------------------------------------------
   // Web Visit App Install Prompt Modal
@@ -531,6 +650,12 @@
     };
 
     ws.onmessage = (event) => {
+      lastPongReceivedTime = Date.now();
+      if (resumeWatchdogTimer) {
+        clearTimeout(resumeWatchdogTimer);
+        resumeWatchdogTimer = null;
+      }
+
       if (event.data instanceof ArrayBuffer) {
         playAudioChunk(event.data);
         return;
@@ -570,9 +695,8 @@
 
     lockLandscape();
 
-    const baseOrigin = serverHost ? `${serverProtocol || 'http:'}//${serverHost}` : (location.protocol === 'file:' ? 'http://127.0.0.1:8080' : '');
     if (liveScreenImg && isScreenMirrorOn) {
-      liveScreenImg.src = baseOrigin + '/screen_stream?t=' + Date.now();
+      startScreenStream();
     }
     sendPayload('screen_quality', { preset: currentQuality });
     setTimeout(hideTouchpadHint, 2500);
@@ -625,17 +749,29 @@
   }
 
   let pingTimer = null;
+  let lastPingSentTime = 0;
+  let lastPongReceivedTime = Date.now();
+
   function startPingInterval() {
     stopPingInterval();
+    lastPongReceivedTime = Date.now();
     pingTimer = setInterval(() => {
       if (ws && ws.readyState === WebSocket.OPEN && isAuthenticated) {
-        sendPayload('ping', { time: Date.now() });
+        if (Date.now() - lastPongReceivedTime > 12000) {
+          console.warn('[Ping] No message received from PC in 12s. Half-open socket detected, reconnecting...');
+          try { ws.close(); } catch (e) {}
+          connectWebSocket(currentId, currentPin, currentAuthToken);
+          return;
+        }
+        lastPingSentTime = Date.now();
+        sendPayload('ping', { time: lastPingSentTime });
       }
     }, 2500);
   }
 
   function stopPingInterval() {
     if (pingTimer) clearInterval(pingTimer);
+    pingTimer = null;
   }
 
   function sendPayload(type, payload = {}) {
@@ -698,7 +834,7 @@
       currentAuthToken = '';
       sendPayload('release_all_keys');
       if (isAudioEnabled) toggleAudio(false);
-      if (liveScreenImg) liveScreenImg.src = '';
+      stopScreenStream();
       if (ws) ws.close();
       controllerScreen.classList.add('hidden');
       authScreen.classList.remove('hidden');
@@ -1236,9 +1372,7 @@
     }
 
     // 1. Temporarily pause mirroring/sharing
-    if (liveScreenImg) {
-      liveScreenImg.src = '';
-    }
+    stopScreenStream();
 
     // 2. Open confirmation modal on phone
     if (savePcModal) {
@@ -1259,9 +1393,8 @@
     savePcTimeoutTimer = setTimeout(() => {
       if (savePcModal && !savePcModal.classList.contains('hidden')) {
         savePcModal.classList.add('hidden');
-        const baseOrigin = serverHost ? `${serverProtocol || 'http:'}//${serverHost}` : (location.protocol === 'file:' ? 'http://127.0.0.1:8080' : '');
         if (liveScreenImg && isScreenMirrorOn) {
-          liveScreenImg.src = baseOrigin + '/screen_stream?t=' + Date.now();
+          restartScreenStream();
         }
         alert('PC에서 본인 확인 응답 시간이 초과되었습니다.\nPC 화면에 확인 창이 나타나지 않은 경우 PC 호스트를 확인해 주세요.');
       }
@@ -1280,9 +1413,8 @@
       savePcModal.classList.add('hidden');
     }
     // Resume screen mirroring
-    const baseOrigin = serverHost ? `${serverProtocol || 'http:'}//${serverHost}` : (location.protocol === 'file:' ? 'http://127.0.0.1:8080' : '');
     if (liveScreenImg && isScreenMirrorOn) {
-      liveScreenImg.src = baseOrigin + '/screen_stream?t=' + Date.now();
+      restartScreenStream();
     }
   }
 
@@ -1293,9 +1425,8 @@
     }
 
     // Resume screen streaming
-    const baseOrigin = serverHost ? `${serverProtocol || 'http:'}//${serverHost}` : (location.protocol === 'file:' ? 'http://127.0.0.1:8080' : '');
     if (liveScreenImg && isScreenMirrorOn) {
-      liveScreenImg.src = baseOrigin + '/screen_stream?t=' + Date.now();
+      restartScreenStream();
     }
 
     const token = payload.token;
@@ -1325,9 +1456,8 @@
     }
 
     // Resume screen streaming
-    const baseOrigin = serverHost ? `${serverProtocol || 'http:'}//${serverHost}` : (location.protocol === 'file:' ? 'http://127.0.0.1:8080' : '');
     if (liveScreenImg && isScreenMirrorOn) {
-      liveScreenImg.src = baseOrigin + '/screen_stream?t=' + Date.now();
+      restartScreenStream();
     }
 
     vibrate([40, 80, 40]);
@@ -1388,11 +1518,11 @@
       if (isScreenMirrorOn) {
         toggleScreenStream.classList.add('active');
         screenViewport.classList.remove('hidden');
-        if (liveScreenImg) liveScreenImg.src = '/screen_stream?t=' + Date.now();
+        startScreenStream();
       } else {
         toggleScreenStream.classList.remove('active');
         screenViewport.classList.add('hidden');
-        if (liveScreenImg) liveScreenImg.src = '';
+        stopScreenStream();
       }
       vibrate(15);
     });
