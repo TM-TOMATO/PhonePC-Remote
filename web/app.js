@@ -329,26 +329,43 @@
     if (serverHost) {
       return `${serverProtocol || 'http:'}//${serverHost}`;
     }
+    const savedHost = localStorage.getItem('phonepc_last_host');
+    const savedProto = localStorage.getItem('phonepc_last_proto') || 'http:';
+    if (savedHost) {
+      serverHost = savedHost;
+      serverProtocol = savedProto;
+      return `${serverProtocol}//${serverHost}`;
+    }
     if (location.protocol === 'file:' || !location.host) {
       return 'http://127.0.0.1:8080';
     }
     return '';
   }
 
+  const BLANK_IMAGE = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
   let streamRetryTimer = null;
-  let isRestartingStream = false;
 
   function startScreenStream() {
     if (!liveScreenImg || !isScreenMirrorOn || !isAuthenticated) return;
     const baseOrigin = getBaseOrigin();
     const newSrc = `${baseOrigin}/screen_stream?t=${Date.now()}`;
     console.log('[Stream] Starting live screen stream:', newSrc);
-    liveScreenImg.src = newSrc;
+    if (screenViewport) {
+      screenViewport.classList.remove('hidden');
+    }
+    liveScreenImg.style.display = 'block';
+    // Clear with 1x1 transparent gif first to forcibly terminate any prior connection
+    liveScreenImg.src = BLANK_IMAGE;
+    setTimeout(() => {
+      if (isScreenMirrorOn && isAuthenticated) {
+        liveScreenImg.src = newSrc;
+      }
+    }, 40);
   }
 
   function stopScreenStream() {
     if (liveScreenImg) {
-      liveScreenImg.src = '';
+      liveScreenImg.src = BLANK_IMAGE;
     }
     if (streamRetryTimer) {
       clearTimeout(streamRetryTimer);
@@ -357,16 +374,14 @@
   }
 
   function restartScreenStream() {
-    if (!liveScreenImg || !isScreenMirrorOn || !isAuthenticated || isRestartingStream) return;
-    isRestartingStream = true;
+    if (!liveScreenImg || !isScreenMirrorOn || !isAuthenticated) return;
     console.log('[Stream] Restarting screen stream...');
     stopScreenStream();
     setTimeout(() => {
-      isRestartingStream = false;
       if (isScreenMirrorOn && isAuthenticated) {
         startScreenStream();
       }
-    }, 120);
+    }, 100);
   }
 
   if (liveScreenImg) {
@@ -1518,11 +1533,18 @@
       if (isScreenMirrorOn) {
         toggleScreenStream.classList.add('active');
         screenViewport.classList.remove('hidden');
+        hideTouchpadHint();
         startScreenStream();
       } else {
         toggleScreenStream.classList.remove('active');
         screenViewport.classList.add('hidden');
         stopScreenStream();
+        if (touchpadHint) {
+          touchpadHint.innerHTML = '<div class="hint-icon">🖥️</div><p class="hint-main">화면 공유 꺼짐</p><p class="hint-sub">상단의 [🖥️ 화면] 버튼을 누르면 다시 켜집니다</p>';
+          touchpadHint.style.display = 'block';
+          touchpadHint.style.opacity = '1';
+          touchpadHint.style.pointerEvents = 'none';
+        }
       }
       vibrate(15);
     });
@@ -1553,10 +1575,16 @@
     isZoomMode = typeof forceState === 'boolean' ? forceState : !isZoomMode;
     if (isZoomMode) {
       toggleZoomBtn.classList.add('active');
+      // Release any active mouse drag immediately so it doesn't get stuck down on the PC
+      if (isDraggingNow) {
+        const activeBtn = clickMode === 'right' ? 'right' : (clickMode || 'left');
+        sendPayload('mouse_click', { button: activeBtn, action: 'up' });
+        isDraggingNow = false;
+      }
     } else {
       toggleZoomBtn.classList.remove('active');
-      // DO NOT RESET ZOOM! Maintain zoomed state so user can interact!
     }
+    isPanning = false;
     applyZoomTransform();
     vibrate(15);
   }
@@ -1598,11 +1626,20 @@
       });
       touchpad.appendChild(indicator);
     }
-    if (zoomLevel > 1.01) {
-      indicator.innerHTML = `<span>🔍 ${zoomLevel.toFixed(1)}x</span> <span style="opacity:0.8;font-size:9px">(탭: 리셋)</span>`;
+    if (isZoomMode) {
+      if (zoomLevel > 1.01) {
+        indicator.innerHTML = `<span>🔍 확대 ${zoomLevel.toFixed(1)}x (마우스 차단됨)</span> <span style="opacity:0.8;font-size:9px">| 탭: 1x 리셋</span>`;
+      } else {
+        indicator.innerHTML = `<span>🔍 확대 모드 ON (마우스 차단됨)</span> <span style="opacity:0.8;font-size:9px">| 두 손가락 핀치/더블탭</span>`;
+      }
       indicator.classList.add('visible');
     } else {
-      indicator.classList.remove('visible');
+      if (zoomLevel > 1.01) {
+        indicator.innerHTML = `<span>🔍 ${zoomLevel.toFixed(1)}x (마우스 조작 모드)</span> <span style="opacity:0.8;font-size:9px">| 탭: 1x 리셋</span>`;
+        indicator.classList.add('visible');
+      } else {
+        indicator.classList.remove('visible');
+      }
     }
   }
 
@@ -1670,6 +1707,56 @@
     const screenTouches = getTouchpadTouches(e);
     touchpadTouchCount = screenTouches.length;
 
+    // =========================================================================
+    // 1. ZOOM MODE (화면 확대 켜짐): 마우스 조작(이동, 클릭, 드래그) 100% 완전 차단
+    // =========================================================================
+    if (isZoomMode) {
+      // 2 fingers in Zoom Mode: Pinch to Zoom
+      if (touchpadTouchCount === 2) {
+        lastPinchDist = getPinchDistance(screenTouches);
+        isPanning = false;
+        return;
+      }
+
+      // 1 finger in Zoom Mode: Double-tap to zoom or drag to pan view
+      if (touchpadTouchCount === 1) {
+        const touch = screenTouches[0];
+        activeTouchpadId = touch.identifier;
+
+        // Double-tap zoom when in zoom mode
+        const now = Date.now();
+        if (now - lastZoomDoubleTap < 300) {
+          if (zoomLevel <= 1.01) {
+            zoomLevel = 2.0;
+            const vpRect = screenViewport.getBoundingClientRect();
+            zoomPanX = ((touch.clientX - vpRect.left) / vpRect.width - 0.5) * 50;
+            zoomPanY = ((touch.clientY - vpRect.top) / vpRect.height - 0.5) * 50;
+            applyZoomTransform();
+          } else {
+            resetZoom();
+          }
+          lastZoomDoubleTap = 0;
+          isPanning = false;
+          return;
+        }
+        lastZoomDoubleTap = now;
+
+        // Start 1-finger panning (view navigation)
+        isPanning = true;
+        panStartX = touch.clientX;
+        panStartY = touch.clientY;
+        panStartZoomX = zoomPanX;
+        panStartZoomY = zoomPanY;
+        return;
+      }
+
+      // In Zoom Mode, all other touches are strictly ignored (NO mouse action!)
+      return;
+    }
+
+    // =========================================================================
+    // 2. NORMAL MODE: 마우스 조작 (확대 모드가 꺼져있을 때만 동작)
+    // =========================================================================
     // 3 fingers on screen mirror = middle click
     if (touchpadTouchCount === 3) {
       activeTouchpadId = null;
@@ -1678,15 +1765,11 @@
       return;
     }
 
-    // 2 fingers on screen mirror
+    // 2 fingers on screen mirror = right click
     if (touchpadTouchCount === 2) {
       activeTouchpadId = null;
-      if (isZoomMode) {
-        lastPinchDist = getPinchDistance(screenTouches);
-      } else {
-        sendPayload('mouse_click', { button: 'right', action: 'click' });
-        vibrate(25);
-      }
+      sendPayload('mouse_click', { button: 'right', action: 'click' });
+      vibrate(25);
       return;
     }
 
@@ -1701,35 +1784,6 @@
     lastTouchY = touch.clientY;
     touchStartTime = Date.now();
     hasMoved = false;
-
-    // Double-tap zoom when zoom mode is ACTIVE
-    if (isZoomMode) {
-      const now = Date.now();
-      if (now - lastZoomDoubleTap < 300) {
-        if (zoomLevel <= 1.01) {
-          zoomLevel = 2.0;
-          const vpRect = screenViewport.getBoundingClientRect();
-          zoomPanX = ((touch.clientX - vpRect.left) / vpRect.width - 0.5) * 50;
-          zoomPanY = ((touch.clientY - vpRect.top) / vpRect.height - 0.5) * 50;
-          applyZoomTransform();
-        } else {
-          resetZoom();
-        }
-        lastZoomDoubleTap = 0;
-        return;
-      }
-      lastZoomDoubleTap = now;
-    }
-
-    // If in zoom mode and zoomed in, single-finger drag pans the view
-    if (isZoomMode && zoomLevel > 1.01) {
-      isPanning = true;
-      panStartX = touch.clientX;
-      panStartY = touch.clientY;
-      panStartZoomX = zoomPanX;
-      panStartZoomY = zoomPanY;
-      return;
-    }
 
     // Direct touch mode: move cursor immediately to touched position
     if (touchMode === 'direct' && isScreenMirrorOn) {
@@ -1756,19 +1810,43 @@
     const screenTouches = getTouchpadTouches(e);
     touchpadTouchCount = screenTouches.length;
 
-    // Pinch-to-zoom when in Zoom Mode with 2 fingers on screen
-    if (touchpadTouchCount === 2 && isZoomMode) {
+    // =========================================================================
+    // 1. ZOOM MODE: 마우스 이동 완전 차단 (핀치 줌 및 화면 이동만)
+    // =========================================================================
+    if (isZoomMode) {
       e.preventDefault();
-      const newDist = getPinchDistance(screenTouches);
-      if (lastPinchDist > 0) {
-        const scale = newDist / lastPinchDist;
-        zoomLevel = Math.max(1.0, Math.min(5.0, zoomLevel * scale));
-        applyZoomTransform();
+      // 2 fingers: Pinch to zoom
+      if (touchpadTouchCount === 2) {
+        const newDist = getPinchDistance(screenTouches);
+        if (lastPinchDist > 0) {
+          const scale = newDist / lastPinchDist;
+          zoomLevel = Math.max(1.0, Math.min(5.0, zoomLevel * scale));
+          applyZoomTransform();
+        }
+        lastPinchDist = newDist;
+        return;
       }
-      lastPinchDist = newDist;
-      return;
+
+      // 1 finger: Pan the magnified screen
+      if (touchpadTouchCount === 1 && isPanning) {
+        let touch = findTouchById(screenTouches, activeTouchpadId) || screenTouches[0];
+        if (zoomLevel > 1.01) {
+          const dx = touch.clientX - panStartX;
+          const dy = touch.clientY - panStartY;
+          const vpRect = screenViewport.getBoundingClientRect();
+          zoomPanX = panStartZoomX - (dx / vpRect.width) * 100 / zoomLevel;
+          zoomPanY = panStartZoomY - (dy / vpRect.height) * 100 / zoomLevel;
+          applyZoomTransform();
+        }
+        return;
+      }
+
+      return; // DO NOT SEND MOUSE MOVES IN ZOOM MODE!
     }
 
+    // =========================================================================
+    // 2. NORMAL MODE: 마우스 이동
+    // =========================================================================
     if (touchpadTouchCount !== 1) return;
     e.preventDefault();
 
@@ -1776,17 +1854,6 @@
     if (!touch) {
       touch = screenTouches[0];
       activeTouchpadId = touch.identifier;
-    }
-
-    // Panning when in Zoom Mode and zoomed
-    if (isPanning && isZoomMode && zoomLevel > 1.01) {
-      const dx = touch.clientX - panStartX;
-      const dy = touch.clientY - panStartY;
-      const vpRect = screenViewport.getBoundingClientRect();
-      zoomPanX = panStartZoomX - (dx / vpRect.width) * 100 / zoomLevel;
-      zoomPanY = panStartZoomY - (dy / vpRect.height) * 100 / zoomLevel;
-      applyZoomTransform();
-      return;
     }
 
     const dx = touch.clientX - lastTouchX;
@@ -1824,11 +1891,21 @@
     const screenTouches = getTouchpadTouches(e);
     touchpadTouchCount = screenTouches.length;
 
-    if (isPanning) {
+    // =========================================================================
+    // 1. ZOOM MODE: 마우스 클릭 완전 차단
+    // =========================================================================
+    if (isZoomMode) {
       isPanning = false;
-      return;
+      lastPinchDist = 0;
+      if (screenTouches.length === 0) {
+        activeTouchpadId = null;
+      }
+      return; // DO NOT SEND ANY MOUSE CLICKS IN ZOOM MODE!
     }
 
+    // =========================================================================
+    // 2. NORMAL MODE: 마우스 클릭 / 드래그 해제
+    // =========================================================================
     const now = Date.now();
     const duration = now - touchStartTime;
 
