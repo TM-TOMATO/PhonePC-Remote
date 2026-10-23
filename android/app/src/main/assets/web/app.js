@@ -121,6 +121,9 @@
   const inputServerHost = document.getElementById('input-server-host');
   const checkAutoSavePc = document.getElementById('check-auto-save-pc');
   const authError = document.getElementById('auth-error');
+  const openInAppBanner = document.getElementById('open-in-app-banner');
+  const btnOpenInApp = document.getElementById('btn-open-in-app');
+  const btnBannerDownload = document.getElementById('btn-banner-download');
   if (inputServerHost) {
     inputServerHost.value = serverHost || '';
   }
@@ -876,14 +879,25 @@
         const url = dataStr.includes('://') ? new URL(dataStr) : new URL(dataStr, 'http://dummy.com');
         id = url.searchParams.get('id');
         pin = url.searchParams.get('pin');
-        if (dataStr.includes('://')) {
-          serverHost = url.host;
-          serverProtocol = url.protocol;
+        const scannedHost = url.searchParams.get('host');
+        const scannedProto = url.searchParams.get('proto');
+
+        if (scannedHost) {
+          serverHost = scannedHost;
           if (inputServerHost) inputServerHost.value = serverHost;
-          try {
-            localStorage.setItem('phonepc_last_host', serverHost);
-            localStorage.setItem('phonepc_last_proto', serverProtocol);
-          } catch (e) {}
+          try { localStorage.setItem('phonepc_last_host', serverHost); } catch (e) {}
+        } else if (dataStr.includes('://') && url.host && url.host !== 'dummy.com') {
+          serverHost = url.host;
+          if (inputServerHost) inputServerHost.value = serverHost;
+          try { localStorage.setItem('phonepc_last_host', serverHost); } catch (e) {}
+        }
+
+        if (scannedProto) {
+          serverProtocol = scannedProto.endsWith(':') ? scannedProto : (scannedProto + ':');
+          try { localStorage.setItem('phonepc_last_proto', serverProtocol); } catch (e) {}
+        } else if (dataStr.includes('://') && url.protocol && url.protocol !== 'http:' && url.protocol !== 'file:') {
+          serverProtocol = url.protocol;
+          try { localStorage.setItem('phonepc_last_proto', serverProtocol); } catch (e) {}
         }
       } else if (dataStr.includes(':')) {
         const parts = dataStr.split(':');
@@ -912,12 +926,31 @@
   }
 
   // --------------------------------------------------------------------------
-  // Auto-Connect from URL parameters or LocalStorage
+  // Auto-Connect from URL parameters or LocalStorage & App Deep Linking
   // --------------------------------------------------------------------------
   function checkUrlAutoConnect() {
     const params = new URLSearchParams(window.location.search);
     const paramId = params.get('id');
     const paramPin = params.get('pin');
+    const paramHost = params.get('host');
+    const paramProto = params.get('proto');
+
+    if (paramHost) {
+      serverHost = paramHost;
+      try {
+        localStorage.setItem('phonepc_last_host', serverHost);
+      } catch (e) {}
+      if (inputServerHost) inputServerHost.value = serverHost;
+    }
+    if (paramProto) {
+      serverProtocol = paramProto.endsWith(':') ? paramProto : (paramProto + ':');
+      try {
+        localStorage.setItem('phonepc_last_proto', serverProtocol);
+      } catch (e) {}
+    }
+
+    // Configure open-in-app banner and deep link intent for mobile browsers
+    setupAppLauncher(paramId, paramPin, paramHost, paramProto);
 
     if (paramId && paramPin) {
       inputPartnerId.value = paramId;
@@ -958,6 +991,84 @@
       // Note: Do NOT prefill inputPin with stale expired PIN
     } catch (e) {}
   }
+
+  // --------------------------------------------------------------------------
+  // Mobile Browser to Native App Launcher & Intent Dispatcher
+  // --------------------------------------------------------------------------
+  function setupAppLauncher(paramId, paramPin, paramHost, paramProto) {
+    const isNativeApp = !!(window.AndroidBridge && typeof window.AndroidBridge.isNativeApp === 'function' && window.AndroidBridge.isNativeApp());
+    if (isNativeApp) {
+      if (openInAppBanner) openInAppBanner.classList.add('hidden');
+      return;
+    }
+
+    const isAndroid = /Android/i.test(navigator.userAgent);
+    if (!isAndroid || !openInAppBanner) {
+      return;
+    }
+
+    const targetHost = paramHost || location.host || serverHost || '127.0.0.1:8080';
+    const targetProto = (paramProto || location.protocol || 'http:').replace(':', '');
+    const cleanId = (paramId || (inputPartnerId ? inputPartnerId.value : '') || '').replace(/\D/g, '');
+    const cleanPin = (paramPin || (inputPin ? inputPin.value : '') || '').trim();
+
+    // Construct Android Chrome Intent URL
+    // When clicked or navigated, Chrome automatically hands off to com.phonepc.remote if installed
+    const intentUrl = `intent://connect?id=${encodeURIComponent(cleanId)}&pin=${encodeURIComponent(cleanPin)}&host=${encodeURIComponent(targetHost)}&proto=${encodeURIComponent(targetProto)}#Intent;scheme=phonepc;package=com.phonepc.remote;end`;
+
+    if (btnOpenInApp) {
+      btnOpenInApp.href = intentUrl;
+    }
+
+    // Show the banner so the user can easily tap to open in app or download APK
+    openInAppBanner.classList.remove('hidden');
+
+    // If opened via QR scan with valid ID & PIN, automatically trigger intent to launch the native app!
+    if (cleanId && cleanPin) {
+      try {
+        const attemptKey = `phonepc_intent_attempt_${cleanId}_${cleanPin}`;
+        if (!sessionStorage.getItem(attemptKey)) {
+          sessionStorage.setItem(attemptKey, '1');
+          console.log('[AppLauncher] Auto-dispatching intent to open native app:', intentUrl);
+          setTimeout(() => {
+            window.location.href = intentUrl;
+          }, 150);
+        }
+      } catch (e) {
+        console.warn('[AppLauncher] Auto intent trigger error:', e);
+      }
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // Deep Link handler exposed to Android Native Bridge
+  // --------------------------------------------------------------------------
+  window.handleDeepLinkConnect = function(id, pin, host, proto) {
+    console.log('[DeepLink] Received deep link connect:', { id, pin, host, proto });
+    if (host) {
+      serverHost = host;
+      try {
+        localStorage.setItem('phonepc_last_host', host);
+      } catch (e) {}
+      if (inputServerHost) inputServerHost.value = host;
+    }
+    if (proto) {
+      serverProtocol = proto.endsWith(':') ? proto : (proto + ':');
+      try {
+        localStorage.setItem('phonepc_last_proto', serverProtocol);
+      } catch (e) {}
+    }
+    if (id && pin) {
+      if (inputPartnerId) inputPartnerId.value = id;
+      if (inputPin) inputPin.value = pin;
+      if (ws) {
+        try {
+          ws.close();
+        } catch (e) {}
+      }
+      connectWebSocket(id, pin);
+    }
+  };
 
   // --------------------------------------------------------------------------
   // Saved PCs & Passwordless Instant Connection

@@ -61,8 +61,106 @@ public class MainActivity extends Activity {
         // Check & request camera and audio permissions on app startup
         checkAndRequestPermissions();
 
-        // Load bundled web app from assets
-        mWebView.loadUrl("file:///android_asset/web/index.html");
+        // Load bundled web app from assets (with deep link query parameters if launched via camera/QR/intent)
+        String initialUrl = resolveInitialUrl(getIntent());
+        mWebView.loadUrl(initialUrl);
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        handleIncomingIntent(intent);
+    }
+
+    private String resolveInitialUrl(Intent intent) {
+        String baseUrl = "file:///android_asset/web/index.html";
+        if (intent == null || intent.getData() == null) {
+            return baseUrl;
+        }
+
+        try {
+            Uri uri = intent.getData();
+            String scheme = uri.getScheme();
+            String id = uri.getQueryParameter("id");
+            String pin = uri.getQueryParameter("pin");
+            String host = uri.getQueryParameter("host");
+            String proto = uri.getQueryParameter("proto");
+
+            if ("phonepc".equalsIgnoreCase(scheme)) {
+                if (proto == null || proto.isEmpty()) {
+                    proto = "http";
+                }
+            } else if ("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme)) {
+                if (host == null || host.isEmpty()) {
+                    host = uri.getAuthority();
+                }
+                if (proto == null || proto.isEmpty()) {
+                    proto = scheme;
+                }
+            }
+
+            if (id != null && !id.isEmpty() && pin != null && !pin.isEmpty()) {
+                StringBuilder sb = new StringBuilder(baseUrl);
+                sb.append("?id=").append(Uri.encode(id));
+                sb.append("&pin=").append(Uri.encode(pin));
+                if (host != null && !host.isEmpty()) {
+                    sb.append("&host=").append(Uri.encode(host));
+                }
+                if (proto != null && !proto.isEmpty()) {
+                    sb.append("&proto=").append(Uri.encode(proto));
+                }
+                return sb.toString();
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+
+        return baseUrl;
+    }
+
+    private void handleIncomingIntent(Intent intent) {
+        if (intent == null || intent.getData() == null || mWebView == null) {
+            return;
+        }
+
+        try {
+            Uri uri = intent.getData();
+            String scheme = uri.getScheme();
+            String id = uri.getQueryParameter("id");
+            String pin = uri.getQueryParameter("pin");
+            String host = uri.getQueryParameter("host");
+            String proto = uri.getQueryParameter("proto");
+
+            if ("phonepc".equalsIgnoreCase(scheme)) {
+                if (proto == null || proto.isEmpty()) proto = "http";
+            } else if ("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme)) {
+                if (host == null || host.isEmpty()) host = uri.getAuthority();
+                if (proto == null || proto.isEmpty()) proto = scheme;
+            }
+
+            if (id != null && !id.isEmpty() && pin != null && !pin.isEmpty()) {
+                final String fId = id.replace("'", "\\'");
+                final String fPin = pin.replace("'", "\\'");
+                final String fHost = (host != null) ? host.replace("'", "\\'") : "";
+                final String fProto = (proto != null) ? proto.replace("'", "\\'") : "http";
+
+                runOnUiThread(() -> {
+                    String js = String.format(
+                        "if (typeof window.handleDeepLinkConnect === 'function') { " +
+                        "  window.handleDeepLinkConnect('%s', '%s', '%s', '%s'); " +
+                        "} else { " +
+                        "  window.location.href = 'file:///android_asset/web/index.html?id=%s&pin=%s&host=%s&proto=%s'; " +
+                        "}",
+                        fId, fPin, fHost, fProto,
+                        fId, fPin, fHost, fProto
+                    );
+                    mWebView.evaluateJavascript(js, null);
+                });
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
     }
 
     private void checkAndRequestPermissions() {
